@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check:rtl": "node scripts/check-rtl.mjs"
+    "check:rtl": "node scripts/check-rtl.mjs",
+    "db:bundle": "node scripts/bundle-sql.mjs"
   },
   "dependencies": {
     "@heroui/react": "3.2.4",
