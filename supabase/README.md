@@ -37,6 +37,15 @@ select * from public.calculate_zone_balance((select id from balance_zones where 
 select * from public.get_missing_readings(current_date - 1, current_date - 1, null);
 ```
 
+## Functional test
+
+After all 12 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
+Editor and run it. It creates a throw-away FIELD_TEAM user, inserts readings, corrections, tank levels,
+impersonates users with `set role authenticated`, and then **rolls everything back on purpose** by
+ending with `RAISE EXCEPTION`. The editor therefore shows a red error box whose message begins with
+`TEST REPORT — N failed of M checks` followed by one `PASS`/`FAIL` line per check. Zero failures is
+the goal; send the full message back if any line says `FAIL`.
+
 ## Rules baked into the schema
 
 - Readings reference `measurement_point_id`, never a meter.

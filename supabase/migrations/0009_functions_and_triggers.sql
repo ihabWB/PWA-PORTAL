@@ -338,7 +338,7 @@ begin
         v_pct := abs(v_in - v_out) / v_base * 100;
         v_tol := coalesce(v_asset.pass_through_tolerance_pct, app.setting_numeric('pass_through_mismatch_pct', 3));
         if v_pct > v_tol then
-          perform app.raise_alert('SAEER_INLET_OUTLET_MISMATCH', 'WARNING', v_asset.id, null, new.id, new.covers_from,
+          perform app.raise_alert('PASS_THROUGH_MISMATCH', 'WARNING', v_asset.id, null, new.id, new.covers_from,
             format('فرق %s٪ بين الداخل (%s م³) والخارج (%s م³) في %s ليوم %s — الحد %s٪',
                    round(v_pct, 1), v_in, v_out, v_asset.name_ar, to_char(new.covers_from, 'DD/MM/YYYY'), v_tol),
             format('%s%% mismatch between inlet (%s m³) and outlet (%s m³) at %s for %s — threshold %s%%',

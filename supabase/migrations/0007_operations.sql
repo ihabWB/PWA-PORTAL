@@ -78,7 +78,7 @@ create table if not exists public.alerts (
   alert_type            text not null check (alert_type in
                           ('MISSING_READING','ABNORMAL_READING','SOURCE_STOPPED','SOURCE_MAINTENANCE',
                            'LOW_RESERVOIR_LEVEL','HIGH_RESERVOIR_LEVEL','WATER_BALANCE_DISCREPANCY',
-                           'DATA_VALIDATION_ERROR','SAEER_INLET_OUTLET_MISMATCH')),
+                           'DATA_VALIDATION_ERROR','PASS_THROUGH_MISMATCH')),
   severity              text not null check (severity in ('INFO','WARNING','CRITICAL')),
   status                text not null default 'OPEN' check (status in ('OPEN','ACKNOWLEDGED','RESOLVED')),
   asset_id              uuid references public.water_assets(id),

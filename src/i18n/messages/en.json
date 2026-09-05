@@ -40,6 +40,11 @@
       "invalidCredentials": "Incorrect email or password",
       "generic": "Could not sign in. Please try again.",
       "notConfigured": "The system is not connected to its database yet. Contact the administrator."
+    },
+    "pending": {
+      "title": "Your account is awaiting activation",
+      "subtitle": "You are signed in as {email}.",
+      "body": "You cannot view or enter data until an administrator activates your account and assigns your role, areas or measurement points. Contact Water Management."
     }
   },
   "home": {
