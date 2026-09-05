@@ -20,7 +20,8 @@ next. Every file is re-runnable: running one twice is harmless.
 | 0009 | `0009_functions_and_triggers.sql` | audit triggers, `get_storage_m3`, abnormal-reading flag, pass-through mismatch alert, status propagation, `get_missing_readings`, `calculate_zone_balance` |
 | 0010 | `0010_rls.sql`                    | `ENABLE ROW LEVEL SECURITY` on every table + explicit policies                                                                                             |
 | 0011 | `0011_seed_saeer_chain.sql`       | Saeer chain seed with **placeholder** wells/connections                                                                                                    |
-| 0012 | `0012_seed_super_admin.sql`       | Promotes the test user to `SUPER_ADMIN`                                                                                                                    |
+| 0012 | `0012_seed_super_admin.sql`       | Promotes the test user to `SUPER_ADMIN` (**run after 0013**, it is re-runnable)                                                                            |
+| 0013 | `0013_fix_audit_generic_key.sql`  | Audit trigger no longer assumes an `id` column; adds `audit_logs.entity_key` (full PK as JSON)                                                             |
 
 Or paste the single bundle produced by `npm run db:bundle` (`supabase/bundle.sql`, git-ignored).
 
@@ -39,7 +40,7 @@ select * from public.get_missing_readings(current_date - 1, current_date - 1, nu
 
 ## Functional test
 
-After all 12 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
+After all 13 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
 Editor and run it. It creates a throw-away FIELD_TEAM user, inserts readings, corrections, tank levels,
 impersonates users with `set role authenticated`, and then **rolls everything back on purpose** by
 ending with `RAISE EXCEPTION`. The editor therefore shows a red error box whose message begins with

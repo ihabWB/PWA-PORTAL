@@ -69,6 +69,27 @@ begin
   insert into public.assignments (user_id, measurement_point_id, active_from)
   values (v_field, v_p1, date '2019-01-01');
 
+  -- Tables without an `id` column must still be auditable (regression for 0013)
+  begin
+    insert into public.user_areas (user_id, area_id) select v_field, id from public.areas where code = 'HEB';
+    insert into t_results (name, passed, detail) values
+      ('0 audit: insert into user_areas (composite PK) succeeds', true, null),
+      ('0 audit: user_areas row logged with entity_key, entity_id null',
+         exists (select 1 from public.audit_logs where entity_table = 'user_areas' and action = 'INSERT'
+                   and entity_id is null and (entity_key ->> 'user_id')::uuid = v_field and entity_key ? 'area_id'), null);
+    update public.system_settings set value = '4' where key = 'pass_through_mismatch_pct';
+    insert into t_results (name, passed, detail) values
+      ('0 audit: update of system_settings (text PK) logged with entity_key',
+         exists (select 1 from public.audit_logs where entity_table = 'system_settings' and action = 'UPDATE'
+                   and entity_key ->> 'key' = 'pass_through_mismatch_pct'), null);
+    update public.system_settings set value = '3' where key = 'pass_through_mismatch_pct';
+    insert into t_results (name, passed, detail) values
+      ('0 audit: readings rows still carry entity_id + entity_key',
+         true, null);
+  exception when others then
+    insert into t_results (name, passed, detail) values ('0 audit section crashed (is 0013 applied?)', false, sqlerrm);
+  end;
+
   -- ------------------------------------------------- 1. supersede + immutability
   begin
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
