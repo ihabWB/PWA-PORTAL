@@ -1,16 +1,22 @@
 -- =============================================================================
--- FUNCTIONAL TEST — run in the Supabase SQL Editor AFTER migrations 0001–0012.
+-- FUNCTIONAL TEST — run in the Supabase SQL Editor AFTER migrations 0001–0013
+-- (0012 re-run last, after 0013).
 --
 -- Everything runs inside one DO block and is ROLLED BACK at the end by design:
 -- the final RAISE EXCEPTION carries the report, so the editor shows a red box whose
 -- message starts with "TEST REPORT". That is the expected outcome. No test data,
 -- no test user and no alerts survive. Read the PASS/FAIL lines in the message.
 --
--- Covers:  1 supersede + immutability + audit     2 pass-through mismatch alert
---          3 zone balance with incomplete data     4 negative RLS as FIELD_TEAM
---          5 inactive user scope                   6 storage curve / linear fallback
---          7 status propagation + SOURCE_STOPPED   8 abnormal-reading flag
---          9 management scope (positive control)
+-- Results are accumulated in a PL/pgSQL array variable, never in a table: sections 4,
+-- 5 and 9 run under `set local role authenticated`, and a switched role has no write
+-- privilege on a temp table owned by the session user. A variable has no ACL at all,
+-- so recording a result can never fail for permission reasons.
+--
+-- Covers:  0 audit on tables without an `id` column   1 supersede + immutability + audit
+--          2 pass-through mismatch alert              3 zone balance with incomplete data
+--          4 negative RLS as FIELD_TEAM               5 inactive user scope
+--          6 storage curve / linear fallback          7 status propagation + SOURCE_STOPPED
+--          8 abnormal-reading flag                    9 management scope (positive control)
 -- =============================================================================
 do $$
 declare
@@ -25,12 +31,15 @@ declare
   v_bal    record;
   v_n      int;
   v_num    numeric;
-  v_txt    text;
+  v_res    text[] := '{}';               -- PASS/FAIL lines; immune to `set role`
+  v_ok     boolean;
   v_total  int;
   v_fail   int;
-  v_report text;
+  v_crash  int;
 begin
-  execute 'create temp table t_results (seq serial, name text, passed boolean, detail text) on commit drop';
+  -- Recording pattern used below (two lines per check, detail evaluated only on failure):
+  --   v_ok  := <condition>;
+  --   v_res := v_res || (case when v_ok then 'PASS  <name>' else 'FAIL  <name>  — ' || <detail> end);
 
   -- --------------------------------------------------------------------- setup
   select id into v_admin from auth.users where lower(email) = 'ehabomear@gmail.com';
@@ -45,10 +54,18 @@ begin
   select id into v_tank  from public.water_assets where code = 'TNK-SAEER';
   select id into v_well1 from public.water_assets where code = 'W-TMP-01';
 
-  insert into t_results (name, passed, detail) values
-    ('setup: admin user found', v_admin is not null, null),
-    ('setup: SAEER-TRANSIT zone found', v_zone is not null, null),
-    ('setup: Saeer inlet/outlet points found', v_in is not null and v_out is not null, null);
+  v_ok  := v_admin is not null;
+  v_res := v_res || (case when v_ok then 'PASS  setup: admin auth user found'
+                          else 'FAIL  setup: admin auth user found  — ehabomear@gmail.com missing' end);
+  v_ok  := v_zone is not null;
+  v_res := v_res || (case when v_ok then 'PASS  setup: SAEER-TRANSIT zone found'
+                          else 'FAIL  setup: SAEER-TRANSIT zone found  — run 0011' end);
+  v_ok  := v_in is not null and v_out is not null;
+  v_res := v_res || (case when v_ok then 'PASS  setup: Saeer inlet/outlet points found'
+                          else 'FAIL  setup: Saeer inlet/outlet points found  — run 0011' end);
+  v_ok  := exists (select 1 from public.profiles where id = v_admin and role = 'SUPER_ADMIN' and is_active);
+  v_res := v_res || (case when v_ok then 'PASS  setup: admin profile is active SUPER_ADMIN (0012 applied)'
+                          else 'FAIL  setup: admin profile is active SUPER_ADMIN (0012 applied)  — re-run 0012 after 0013' end);
 
   -- A throw-away FIELD_TEAM user (rolled back with everything else)
   insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -59,35 +76,33 @@ begin
           '{"provider":"email","providers":["email"]}', '{"full_name":"Field Tester"}', now(), now(),
           '', '', '', '');
 
-  select count(*) into v_n from public.profiles where id = v_field;
-  insert into t_results (name, passed, detail) values
-    ('setup: profile auto-created by auth trigger (inactive)', v_n = 1
-       and (select not is_active from public.profiles where id = v_field), null);
+  v_ok := exists (select 1 from public.profiles where id = v_field and not is_active and role = 'FIELD_TEAM');
+  v_res := v_res || (case when v_ok then 'PASS  setup: profile auto-created by auth trigger (inactive, FIELD_TEAM)'
+                          else 'FAIL  setup: profile auto-created by auth trigger (inactive, FIELD_TEAM)' end);
 
   update public.profiles set is_active = true, role = 'FIELD_TEAM', full_name_ar = 'عامل حقلي تجريبي'
    where id = v_field;
   insert into public.assignments (user_id, measurement_point_id, active_from)
   values (v_field, v_p1, date '2019-01-01');
 
-  -- Tables without an `id` column must still be auditable (regression for 0013)
+  -- ------------------------- 0. audit on tables without an `id` column (0013) --
   begin
     insert into public.user_areas (user_id, area_id) select v_field, id from public.areas where code = 'HEB';
-    insert into t_results (name, passed, detail) values
-      ('0 audit: insert into user_areas (composite PK) succeeds', true, null),
-      ('0 audit: user_areas row logged with entity_key, entity_id null',
-         exists (select 1 from public.audit_logs where entity_table = 'user_areas' and action = 'INSERT'
-                   and entity_id is null and (entity_key ->> 'user_id')::uuid = v_field and entity_key ? 'area_id'), null);
+    v_res := v_res || 'PASS  0 audit: INSERT into user_areas (composite PK) succeeds';
+
+    v_ok := exists (select 1 from public.audit_logs where entity_table = 'user_areas' and action = 'INSERT'
+                      and entity_id is null and (entity_key ->> 'user_id')::uuid = v_field and entity_key ? 'area_id');
+    v_res := v_res || (case when v_ok then 'PASS  0 audit: user_areas logged with entity_key, entity_id null'
+                            else 'FAIL  0 audit: user_areas logged with entity_key, entity_id null' end);
+
     update public.system_settings set value = '4' where key = 'pass_through_mismatch_pct';
-    insert into t_results (name, passed, detail) values
-      ('0 audit: update of system_settings (text PK) logged with entity_key',
-         exists (select 1 from public.audit_logs where entity_table = 'system_settings' and action = 'UPDATE'
-                   and entity_key ->> 'key' = 'pass_through_mismatch_pct'), null);
+    v_ok := exists (select 1 from public.audit_logs where entity_table = 'system_settings' and action = 'UPDATE'
+                      and entity_key ->> 'key' = 'pass_through_mismatch_pct');
+    v_res := v_res || (case when v_ok then 'PASS  0 audit: system_settings (text PK) logged with entity_key'
+                            else 'FAIL  0 audit: system_settings (text PK) logged with entity_key' end);
     update public.system_settings set value = '3' where key = 'pass_through_mismatch_pct';
-    insert into t_results (name, passed, detail) values
-      ('0 audit: readings rows still carry entity_id + entity_key',
-         true, null);
   exception when others then
-    insert into t_results (name, passed, detail) values ('0 audit section crashed (is 0013 applied?)', false, sqlerrm);
+    v_res := v_res || ('FAIL  0 section crashed (is 0013 applied?)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------------- 1. supersede + immutability
@@ -99,45 +114,58 @@ begin
     values (v_p1, v_d, v_d, 1250, 'METER_DISPLAY', 'OPERATING', v_admin, v_r1, 'تصحيح') returning id into v_r2;
 
     select * into v_old from public.readings where id = v_r1;
-    insert into t_results (name, passed, detail) values
-      ('1 supersede: original marked is_superseded', v_old.is_superseded, null),
-      ('1 supersede: original volume intact (1200)', v_old.volume_m3 = 1200, 'got ' || v_old.volume_m3),
-      ('1 supersede: correction is the only active row for the day',
-         (select count(*) from public.readings where measurement_point_id = v_p1 and covers_from = v_d and not is_superseded) = 1, null),
-      ('1 supersede: correction points at original', (select supersedes_id = v_r1 from public.readings where id = v_r2), null);
+
+    v_ok := v_old.is_superseded;
+    v_res := v_res || (case when v_ok then 'PASS  1 supersede: original marked is_superseded'
+                            else 'FAIL  1 supersede: original marked is_superseded' end);
+
+    v_ok := v_old.volume_m3 = 1200;
+    v_res := v_res || (case when v_ok then 'PASS  1 supersede: original volume intact (1200)'
+                            else 'FAIL  1 supersede: original volume intact (1200)  — got ' || v_old.volume_m3 end);
+
+    v_ok := (select count(*) from public.readings
+              where measurement_point_id = v_p1 and covers_from = v_d and not is_superseded) = 1;
+    v_res := v_res || (case when v_ok then 'PASS  1 supersede: correction is the only active row for the day'
+                            else 'FAIL  1 supersede: correction is the only active row for the day' end);
+
+    v_ok := (select supersedes_id = v_r1 from public.readings where id = v_r2);
+    v_res := v_res || (case when v_ok then 'PASS  1 supersede: correction points at the original'
+                            else 'FAIL  1 supersede: correction points at the original' end);
 
     begin
       update public.readings set volume_m3 = 999 where id = v_r1;
-      insert into t_results (name, passed, detail) values ('1 immutability: UPDATE volume refused', false, 'update was allowed');
+      v_res := v_res || 'FAIL  1 immutability: UPDATE of volume refused  — update was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('1 immutability: UPDATE volume refused', true, sqlerrm);
+      v_res := v_res || 'PASS  1 immutability: UPDATE of volume refused';
     end;
 
     begin
       delete from public.readings where id = v_r1;
-      insert into t_results (name, passed, detail) values ('1 immutability: DELETE refused', false, 'delete was allowed');
+      v_res := v_res || 'FAIL  1 immutability: DELETE refused  — delete was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('1 immutability: DELETE refused', true, sqlerrm);
+      v_res := v_res || 'PASS  1 immutability: DELETE refused';
     end;
 
-    -- re-superseding an already superseded row must fail
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by, supersedes_id)
       values (v_p1, v_d, v_d, 1, 'ESTIMATE', v_admin, v_r1);
-      insert into t_results (name, passed, detail) values ('1 supersede: double supersede refused', false, 'was allowed');
+      v_res := v_res || 'FAIL  1 supersede: double supersede refused  — was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('1 supersede: double supersede refused', true, sqlerrm);
+      v_res := v_res || 'PASS  1 supersede: double supersede refused';
     end;
 
     select count(*) into v_n from public.audit_logs where entity_table = 'readings' and entity_id in (v_r1, v_r2);
-    insert into t_results (name, passed, detail) values
-      ('1 audit: insert r1, insert r2, update r1 logged (>=3)', v_n >= 3, 'rows=' || v_n);
-    insert into t_results (name, passed, detail) values
-      ('1 audit: previous value recoverable from audit_logs',
-         exists (select 1 from public.audit_logs where entity_id = v_r1 and action = 'UPDATE'
-                   and (old_value ->> 'is_superseded')::boolean = false and (new_value ->> 'is_superseded')::boolean = true), null);
+    v_ok := v_n >= 3;
+    v_res := v_res || (case when v_ok then 'PASS  1 audit: inserts + supersede update logged (>=3)'
+                            else 'FAIL  1 audit: inserts + supersede update logged (>=3)  — rows=' || v_n end);
+
+    v_ok := exists (select 1 from public.audit_logs where entity_id = v_r1 and action = 'UPDATE'
+                      and (old_value ->> 'is_superseded')::boolean = false
+                      and (new_value ->> 'is_superseded')::boolean = true);
+    v_res := v_res || (case when v_ok then 'PASS  1 audit: previous value recoverable from audit_logs'
+                            else 'FAIL  1 audit: previous value recoverable from audit_logs' end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('1 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  1 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------------------ 2. pass-through check
@@ -147,28 +175,28 @@ begin
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_out, v_d, v_d,  900, 'METER_DIFF', v_admin);
 
-    insert into t_results (name, passed, detail) values
-      ('2 pass-through: 10% mismatch raised PASS_THROUGH_MISMATCH',
-         exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                   and asset_id = v_tank and reference_date = v_d and status = 'OPEN'), null);
+    v_ok := exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
+                      and asset_id = v_tank and reference_date = v_d and status = 'OPEN');
+    v_res := v_res || (case when v_ok then 'PASS  2 pass-through: 10% mismatch raised PASS_THROUGH_MISMATCH'
+                            else 'FAIL  2 pass-through: 10% mismatch raised PASS_THROUGH_MISMATCH' end);
 
     select (details ->> 'difference_pct')::numeric into v_num
     from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH' and asset_id = v_tank and reference_date = v_d;
-    insert into t_results (name, passed, detail) values
-      ('2 pass-through: alert stores inputs (difference_pct≈10, threshold 3)',
-         v_num between 9.9 and 10.1
-         and (select (details ->> 'threshold_pct')::numeric = 3 and (details ->> 'inlet_m3')::numeric = 1000
-                from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH' and asset_id = v_tank and reference_date = v_d),
-         'difference_pct=' || coalesce(v_num::text, 'null'));
+    v_ok := v_num between 9.9 and 10.1
+            and (select (details ->> 'threshold_pct')::numeric = 3 and (details ->> 'inlet_m3')::numeric = 1000
+                   from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
+                    and asset_id = v_tank and reference_date = v_d);
+    v_res := v_res || (case when v_ok then 'PASS  2 pass-through: alert stores its inputs (difference_pct≈10, threshold 3)'
+                            else 'FAIL  2 pass-through: alert stores its inputs  — difference_pct=' || coalesce(v_num::text, 'null') end);
 
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_in,  v_d + 1, v_d + 1, 1000, 'METER_DIFF', v_admin);
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_out, v_d + 1, v_d + 1,  985, 'METER_DIFF', v_admin);
-    insert into t_results (name, passed, detail) values
-      ('2 pass-through: 1.5% mismatch raises nothing',
-         not exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                       and asset_id = v_tank and reference_date = v_d + 1), null);
+    v_ok := not exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
+                          and asset_id = v_tank and reference_date = v_d + 1);
+    v_res := v_res || (case when v_ok then 'PASS  2 pass-through: 1.5% mismatch raises nothing'
+                            else 'FAIL  2 pass-through: 1.5% mismatch raises nothing' end);
 
     -- threshold is data: tighten to 1% for this asset, next day at 1.5% must alert
     update public.water_assets set pass_through_tolerance_pct = 1 where id = v_tank;
@@ -176,17 +204,17 @@ begin
     values (v_in,  v_d + 2, v_d + 2, 1000, 'METER_DIFF', v_admin);
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_out, v_d + 2, v_d + 2,  985, 'METER_DIFF', v_admin);
-    insert into t_results (name, passed, detail) values
-      ('2 pass-through: per-asset threshold override (1%) applied',
-         exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                   and asset_id = v_tank and reference_date = v_d + 2), null);
+    v_ok := exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
+                      and asset_id = v_tank and reference_date = v_d + 2);
+    v_res := v_res || (case when v_ok then 'PASS  2 pass-through: per-asset threshold override (1%) applied'
+                            else 'FAIL  2 pass-through: per-asset threshold override (1%) applied' end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('2 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  2 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------- 3. balance with incomplete data
   begin
-    -- Day v_d: sources 1..5 reported (1250 + 4×800), sources 6,7, IC1, IC2 missing; inlet 1000.
+    -- Day v_d: sources 1..5 reported (1250 + 4×800); sources 6,7 and both connections missing; inlet 1000.
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_p2, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
            (v_p3, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
@@ -194,138 +222,202 @@ begin
            (v_p5, v_d, v_d, 800, 'METER_DISPLAY', v_admin);
 
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d);
-    insert into t_results (name, passed, detail) values
-      ('3 balance: inflow = 4450',              v_bal.inflow_m3 = 4450,            'got ' || v_bal.inflow_m3),
-      ('3 balance: groundwater 4450 / israeli 0', v_bal.inflow_groundwater_m3 = 4450 and v_bal.inflow_israeli_m3 = 0, null),
-      ('3 balance: arrival = 1000',             v_bal.arrival_m3 = 1000,           'got ' || v_bal.arrival_m3),
-      ('3 balance: measured outflow = 0',       v_bal.outflow_measured_m3 = 0,     null),
-      ('3 balance: difference (unexplained) = 3450', v_bal.difference_m3 = 3450,   'got ' || v_bal.difference_m3),
-      ('3 balance: no storage term for transit zone', v_bal.storage_change_m3 = 0 and v_bal.storage_complete, null),
-      ('3 completeness: points_expected = 10',  v_bal.points_expected = 10,        'got ' || v_bal.points_expected),
-      ('3 completeness: points_complete = 6',   v_bal.points_complete = 6,         'got ' || v_bal.points_complete),
-      ('3 completeness: point-days 6/10',       v_bal.point_days_reported = 6 and v_bal.point_days_expected = 10, null),
-      ('3 sources: total 9, operating 1 (only W-TMP-01 carried a status)',
-         v_bal.sources_total = 9 and v_bal.sources_operating = 1, format('total=%s operating=%s', v_bal.sources_total, v_bal.sources_operating)),
-      ('3 by_role: INFLOW 5/9 complete', (v_bal.by_role -> 'INFLOW' ->> 'points_complete')::int = 5
-                                          and (v_bal.by_role -> 'INFLOW' ->> 'points_expected')::int = 9, v_bal.by_role::text);
+
+    v_ok := v_bal.inflow_m3 = 4450;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: inflow = 4450'
+                            else 'FAIL  3 balance: inflow = 4450  — got ' || v_bal.inflow_m3 end);
+
+    v_ok := v_bal.inflow_groundwater_m3 = 4450 and v_bal.inflow_israeli_m3 = 0;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: groundwater 4450 / israeli 0'
+                            else 'FAIL  3 balance: groundwater 4450 / israeli 0' end);
+
+    v_ok := v_bal.arrival_m3 = 1000;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: arrival = 1000'
+                            else 'FAIL  3 balance: arrival = 1000  — got ' || v_bal.arrival_m3 end);
+
+    v_ok := v_bal.outflow_measured_m3 = 0;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: measured outflow = 0'
+                            else 'FAIL  3 balance: measured outflow = 0' end);
+
+    v_ok := v_bal.difference_m3 = 3450;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: difference (unexplained) = 3450'
+                            else 'FAIL  3 balance: difference (unexplained) = 3450  — got ' || v_bal.difference_m3 end);
+
+    v_ok := v_bal.storage_change_m3 = 0 and v_bal.storage_complete;
+    v_res := v_res || (case when v_ok then 'PASS  3 balance: no storage term for a transit zone'
+                            else 'FAIL  3 balance: no storage term for a transit zone' end);
+
+    v_ok := v_bal.points_expected = 10;
+    v_res := v_res || (case when v_ok then 'PASS  3 completeness: points_expected = 10'
+                            else 'FAIL  3 completeness: points_expected = 10  — got ' || v_bal.points_expected end);
+
+    v_ok := v_bal.points_complete = 6;
+    v_res := v_res || (case when v_ok then 'PASS  3 completeness: points_complete = 6'
+                            else 'FAIL  3 completeness: points_complete = 6  — got ' || v_bal.points_complete end);
+
+    v_ok := v_bal.point_days_reported = 6 and v_bal.point_days_expected = 10;
+    v_res := v_res || (case when v_ok then 'PASS  3 completeness: point-days 6/10'
+                            else 'FAIL  3 completeness: point-days 6/10' end);
+
+    v_ok := v_bal.sources_total = 9 and v_bal.sources_operating = 1;
+    v_res := v_res || (case when v_ok then 'PASS  3 sources: total 9, operating 1'
+                            else 'FAIL  3 sources: total 9, operating 1  — ' || format('total=%s operating=%s', v_bal.sources_total, v_bal.sources_operating) end);
+
+    v_ok := (v_bal.by_role -> 'INFLOW' ->> 'points_complete')::int = 5
+            and (v_bal.by_role -> 'INFLOW' ->> 'points_expected')::int = 9;
+    v_res := v_res || (case when v_ok then 'PASS  3 by_role: INFLOW 5/9 complete'
+                            else 'FAIL  3 by_role: INFLOW 5/9 complete  — ' || v_bal.by_role::text end);
 
     select count(*) into v_n from public.get_missing_readings(v_d, v_d, null);
-    insert into t_results (name, passed, detail) values
-      ('3 missing readings: 4 of 11 daily points missing on day 1', v_n = 4, 'got ' || v_n);
+    v_ok := v_n = 4;
+    v_res := v_res || (case when v_ok then 'PASS  3 missing readings: 4 of 11 daily points missing on day 1'
+                            else 'FAIL  3 missing readings: 4 of 11 daily points missing on day 1  — got ' || v_n end);
 
-    -- proration: a 2-day reading (600 m³) on p2 contributes 300 to each day
+    -- proration: a 2-day reading (600 m³) contributes 300 to each day
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_p2, v_d + 1, v_d + 2, 600, 'METER_DIFF', v_admin);
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d + 1, v_d + 1);
-    insert into t_results (name, passed, detail) values
-      ('3 proration: 2-day reading contributes half to a single day', v_bal.inflow_m3 = 300, 'got ' || v_bal.inflow_m3),
-      ('3 proration: the 2-day reading counts as coverage for day 2', v_bal.points_complete = 2, 'got ' || v_bal.points_complete);
 
-    -- week range: 3 days, expected point-days = 30
+    v_ok := v_bal.inflow_m3 = 300;
+    v_res := v_res || (case when v_ok then 'PASS  3 proration: 2-day reading contributes half to a single day'
+                            else 'FAIL  3 proration: 2-day reading contributes half to a single day  — got ' || v_bal.inflow_m3 end);
+
+    v_ok := v_bal.points_complete = 2;
+    v_res := v_res || (case when v_ok then 'PASS  3 proration: the 2-day reading counts as coverage'
+                            else 'FAIL  3 proration: the 2-day reading counts as coverage  — got ' || v_bal.points_complete end);
+
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d + 2);
-    insert into t_results (name, passed, detail) values
-      ('3 range: 3-day window → 30 point-days expected, arrival 3000', v_bal.point_days_expected = 30 and v_bal.arrival_m3 = 3000,
-         format('pd=%s arrival=%s', v_bal.point_days_expected, v_bal.arrival_m3));
+    v_ok := v_bal.point_days_expected = 30 and v_bal.arrival_m3 = 3000;
+    v_res := v_res || (case when v_ok then 'PASS  3 range: 3-day window → 30 point-days expected, arrival 3000'
+                            else 'FAIL  3 range: 3-day window  — ' || format('pd=%s arrival=%s', v_bal.point_days_expected, v_bal.arrival_m3) end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('3 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  3 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------------ 4. negative RLS: FIELD_TEAM
+  -- Recording into v_res (a variable) is what makes this section survive `set role`.
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
 
-    insert into t_results (name, passed, detail) values
-      ('4 rls: impersonation works (auth.uid() = field user)', auth.uid() = v_field, null),
-      ('4 rls: app.user_role() = FIELD_TEAM', app.user_role() = 'FIELD_TEAM', app.user_role());
+    v_ok := auth.uid() = v_field;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: impersonation active (auth.uid() = field user)'
+                            else 'FAIL  4 rls: impersonation active  — auth.uid()=' || coalesce(auth.uid()::text, 'null') end);
+
+    v_ok := app.user_role() = 'FIELD_TEAM';
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: app.user_role() = FIELD_TEAM'
+                            else 'FAIL  4 rls: app.user_role() = FIELD_TEAM  — got ' || coalesce(app.user_role(), 'null') end);
 
     select count(*) into v_n from public.measurement_points;
-    insert into t_results (name, passed, detail) values ('4 rls: sees only the 1 assigned point (of 11)', v_n = 1, 'got ' || v_n);
+    v_ok := v_n = 1;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: sees only the 1 assigned point (of 11)'
+                            else 'FAIL  4 rls: sees only the 1 assigned point (of 11)  — got ' || v_n end);
 
     select count(*) into v_n from public.readings where measurement_point_id = v_p2;
-    insert into t_results (name, passed, detail) values ('4 rls: readings of unassigned point hidden (0)', v_n = 0, 'got ' || v_n);
+    v_ok := v_n = 0;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: readings of an unassigned point are hidden (0)'
+                            else 'FAIL  4 rls: readings of an unassigned point are hidden (0)  — got ' || v_n end);
 
     select count(*) into v_n from public.readings where measurement_point_id = v_p1;
-    insert into t_results (name, passed, detail) values ('4 rls: readings of assigned point visible (2 incl. superseded)', v_n = 2, 'got ' || v_n);
+    v_ok := v_n = 2;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: readings of the assigned point are visible (2)'
+                            else 'FAIL  4 rls: readings of the assigned point are visible (2)  — got ' || v_n end);
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis)
       values (v_p2, v_d + 5, v_d + 5, 10, 'ESTIMATE');
-      insert into t_results (name, passed, detail) values ('4 rls: INSERT on unassigned point refused (42501)', false, 'insert was allowed');
+      v_res := v_res || 'FAIL  4 rls: INSERT on an unassigned point refused  — insert was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: INSERT on unassigned point refused (42501)', sqlstate = '42501', sqlstate || ' ' || sqlerrm);
+      v_res := v_res || (case when sqlstate = '42501' then 'PASS  4 rls: INSERT on an unassigned point refused (42501)'
+                              else 'FAIL  4 rls: INSERT on an unassigned point refused  — wrong error ' || sqlstate || ' ' || sqlerrm end);
     end;
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
       values (v_p1, v_d + 5, v_d + 5, 10, 'ESTIMATE', v_admin);   -- forging entered_by
-      insert into t_results (name, passed, detail) values ('4 rls: INSERT with forged entered_by refused', false, 'insert was allowed');
+      v_res := v_res || 'FAIL  4 rls: INSERT with a forged entered_by refused  — insert was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: INSERT with forged entered_by refused', sqlstate = '42501', sqlstate || ' ' || sqlerrm);
+      v_res := v_res || (case when sqlstate = '42501' then 'PASS  4 rls: INSERT with a forged entered_by refused (42501)'
+                              else 'FAIL  4 rls: INSERT with a forged entered_by refused  — wrong error ' || sqlstate || ' ' || sqlerrm end);
     end;
 
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis)
     values (v_p1, v_d + 5, v_d + 5, 10, 'ESTIMATE') returning id into v_r3;
-    insert into t_results (name, passed, detail) values
-      ('4 rls: INSERT on assigned point allowed, entered_by = self',
-         (select entered_by = v_field from public.readings where id = v_r3), null);
+    v_ok := (select entered_by = v_field from public.readings where id = v_r3);
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: INSERT on the assigned point allowed, entered_by = self'
+                            else 'FAIL  4 rls: INSERT on the assigned point allowed, entered_by = self' end);
 
     update public.readings set validation_notes = 'x' where id = v_r3;
     get diagnostics v_n = row_count;
-    insert into t_results (name, passed, detail) values ('4 rls: UPDATE by field team affects 0 rows', v_n = 0, 'rows=' || v_n);
+    v_ok := v_n = 0;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: UPDATE by field team affects 0 rows'
+                            else 'FAIL  4 rls: UPDATE by field team affects 0 rows  — rows=' || v_n end);
 
     begin
       delete from public.readings where id = v_r3;
       get diagnostics v_n = row_count;
-      insert into t_results (name, passed, detail) values ('4 rls: DELETE by field team refused', v_n = 0, 'rows=' || v_n);
+      v_ok := v_n = 0;
+      v_res := v_res || (case when v_ok then 'PASS  4 rls: DELETE by field team affects 0 rows'
+                              else 'FAIL  4 rls: DELETE by field team refused  — rows=' || v_n end);
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: DELETE by field team refused', true, sqlstate || ' ' || sqlerrm);
+      v_res := v_res || ('PASS  4 rls: DELETE by field team refused (' || sqlstate || ')');
     end;
 
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, supersedes_id)
     values (v_p1, v_d + 5, v_d + 5, 12, 'ESTIMATE', v_r3);
-    insert into t_results (name, passed, detail) values
-      ('4 rls: field team corrects own reading via supersede (no UPDATE right needed)',
-         (select is_superseded from public.readings where id = v_r3), null);
+    v_ok := (select is_superseded from public.readings where id = v_r3);
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: field team corrects its own reading via supersede (no UPDATE right)'
+                            else 'FAIL  4 rls: field team corrects its own reading via supersede' end);
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, supersedes_id)
-      values (v_p1, v_d + 5, v_d + 5, 13, 'ESTIMATE', v_r1);   -- superseding a row on another day/point mismatch is a trigger error
-      insert into t_results (name, passed, detail) values ('4 rls: supersede of already-superseded row refused', false, 'was allowed');
+      values (v_p1, v_d + 5, v_d + 5, 13, 'ESTIMATE', v_r3);      -- already superseded above
+      v_res := v_res || 'FAIL  4 rls: supersede of an already-superseded row refused  — was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: supersede of already-superseded row refused', true, sqlstate);
+      v_res := v_res || ('PASS  4 rls: supersede of an already-superseded row refused (' || sqlstate || ')');
     end;
 
     select count(*) into v_n from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH';
-    insert into t_results (name, passed, detail) values ('4 rls: tank alerts hidden from field team (0)', v_n = 0, 'got ' || v_n);
+    v_ok := v_n = 0;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: tank alerts hidden from field team (0)'
+                            else 'FAIL  4 rls: tank alerts hidden from field team (0)  — got ' || v_n end);
 
     select count(*) into v_n from public.audit_logs;
-    insert into t_results (name, passed, detail) values ('4 rls: audit_logs hidden from field team (0)', v_n = 0, 'got ' || v_n);
+    v_ok := v_n = 0;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: audit_logs hidden from field team (0)'
+                            else 'FAIL  4 rls: audit_logs hidden from field team (0)  — got ' || v_n end);
 
     select count(*) into v_n from public.profiles;
-    insert into t_results (name, passed, detail) values ('4 rls: profiles → own row only (1)', v_n = 1, 'got ' || v_n);
+    v_ok := v_n = 1;
+    v_res := v_res || (case when v_ok then 'PASS  4 rls: profiles → own row only (1)'
+                            else 'FAIL  4 rls: profiles → own row only (1)  — got ' || v_n end);
 
     begin
       update public.profiles set role = 'SUPER_ADMIN' where id = v_field;
       get diagnostics v_n = row_count;
-      insert into t_results (name, passed, detail) values ('4 rls: self-promotion to SUPER_ADMIN refused', v_n = 0, 'rows=' || v_n);
+      v_ok := v_n = 0 and (select role from public.profiles where id = v_field) = 'FIELD_TEAM';
+      v_res := v_res || (case when v_ok then 'PASS  4 rls: self-promotion to SUPER_ADMIN refused'
+                              else 'FAIL  4 rls: self-promotion to SUPER_ADMIN refused  — rows=' || v_n end);
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: self-promotion to SUPER_ADMIN refused', true, sqlstate || ' ' || sqlerrm);
+      v_res := v_res || ('PASS  4 rls: self-promotion to SUPER_ADMIN refused (' || sqlstate || ')');
     end;
 
     begin
       insert into public.water_assets (code, name_ar, asset_type, supply_type) values ('W-HACK', 'x', 'WELL', 'GROUNDWATER');
-      insert into t_results (name, passed, detail) values ('4 rls: field team cannot create assets', false, 'was allowed');
+      v_res := v_res || 'FAIL  4 rls: field team cannot create assets  — was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: field team cannot create assets', sqlstate = '42501', sqlstate);
+      v_res := v_res || (case when sqlstate = '42501' then 'PASS  4 rls: field team cannot create assets (42501)'
+                              else 'FAIL  4 rls: field team cannot create assets  — wrong error ' || sqlstate end);
     end;
 
     begin
       update public.system_settings set value = '99' where key = 'pass_through_mismatch_pct';
       get diagnostics v_n = row_count;
-      insert into t_results (name, passed, detail) values ('4 rls: field team cannot change thresholds', v_n = 0, 'rows=' || v_n);
+      v_ok := v_n = 0;
+      v_res := v_res || (case when v_ok then 'PASS  4 rls: field team cannot change thresholds'
+                              else 'FAIL  4 rls: field team cannot change thresholds  — rows=' || v_n end);
     exception when others then
-      insert into t_results (name, passed, detail) values ('4 rls: field team cannot change thresholds', true, sqlstate);
+      v_res := v_res || ('PASS  4 rls: field team cannot change thresholds (' || sqlstate || ')');
     end;
 
     execute 'reset role';
@@ -333,7 +425,7 @@ begin
   exception when others then
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
-    insert into t_results (name, passed, detail) values ('4 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  4 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------------------- 5. inactive user
@@ -343,11 +435,22 @@ begin
     perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
 
     select count(*) into v_n from public.profiles where id = auth.uid();
-    insert into t_results (name, passed, detail) values ('5 inactive: own profile still readable (UI can explain state)', v_n = 1, 'got ' || v_n);
-    insert into t_results (name, passed, detail) values ('5 inactive: is_active reads false', (select not is_active from public.profiles where id = auth.uid()), null);
+    v_ok := v_n = 1;
+    v_res := v_res || (case when v_ok then 'PASS  5 inactive: own profile still readable (UI can explain the state)'
+                            else 'FAIL  5 inactive: own profile still readable  — got ' || v_n end);
+
+    v_ok := (select not is_active from public.profiles where id = auth.uid());
+    v_res := v_res || (case when v_ok then 'PASS  5 inactive: is_active reads false'
+                            else 'FAIL  5 inactive: is_active reads false' end);
+
     select count(*) into v_n from public.measurement_points;
-    insert into t_results (name, passed, detail) values ('5 inactive: sees 0 measurement points', v_n = 0, 'got ' || v_n);
-    insert into t_results (name, passed, detail) values ('5 inactive: app.user_role() is null', app.user_role() is null, coalesce(app.user_role(), 'null'));
+    v_ok := v_n = 0;
+    v_res := v_res || (case when v_ok then 'PASS  5 inactive: sees 0 measurement points'
+                            else 'FAIL  5 inactive: sees 0 measurement points  — got ' || v_n end);
+
+    v_ok := app.user_role() is null;
+    v_res := v_res || (case when v_ok then 'PASS  5 inactive: app.user_role() is null'
+                            else 'FAIL  5 inactive: app.user_role() is null  — got ' || coalesce(app.user_role(), 'null') end);
 
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
@@ -355,51 +458,64 @@ begin
   exception when others then
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
-    insert into t_results (name, passed, detail) values ('5 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  5 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ---------------------------------------------- 6. storage: curve / fallback
   begin
     insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d, 2.5, v_admin);
-    insert into t_results (name, passed, detail) values
-      ('6 storage: unknown geometry → storage NULL (never invented)',
-         (select storage_m3 is null and percentage_full is null from public.tank_level_readings where asset_id = v_tank and reading_date = v_d), null);
+    v_ok := (select storage_m3 is null and percentage_full is null
+               from public.tank_level_readings where asset_id = v_tank and reading_date = v_d);
+    v_res := v_res || (case when v_ok then 'PASS  6 storage: unknown geometry → storage NULL (never invented)'
+                            else 'FAIL  6 storage: unknown geometry → storage NULL' end);
 
     update public.water_assets set capacity_m3 = 5000, height_m = 5 where id = v_tank;
     insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d + 1, 2.5, v_admin);
-    insert into t_results (name, passed, detail) values
-      ('6 storage: linear fallback 2.5 m of 5 m × 5000 = 2500 m³ (50%)',
-         (select storage_m3 = 2500 and percentage_full = 50 from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 1), null);
+    v_ok := (select storage_m3 = 2500 and percentage_full = 50
+               from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 1);
+    v_res := v_res || (case when v_ok then 'PASS  6 storage: linear fallback 2.5 m of 5 m × 5000 = 2500 m³ (50%)'
+                            else 'FAIL  6 storage: linear fallback  — got '
+                                 || coalesce((select storage_m3::text from public.tank_level_readings
+                                               where asset_id = v_tank and reading_date = v_d + 1), 'null') end);
 
     insert into public.level_volume_curve (asset_id, level_m, volume_m3) values (v_tank, 0, 0), (v_tank, 2, 2000), (v_tank, 5, 6000);
     insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d + 2, 2.5, v_admin);
-    insert into t_results (name, passed, detail) values
-      ('6 storage: curve interpolation 2.5 m between (2,2000)-(5,6000) = 2666.67',
-         (select storage_m3 = 2666.67 from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 2),
-         (select 'got ' || storage_m3 from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 2));
-    insert into t_results (name, passed, detail) values
-      ('6 storage: get_storage_m3 direct call (level 1 → 1000)', public.get_storage_m3(v_tank, 1) = 1000, null);
+    v_ok := (select storage_m3 = 2666.67 from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 2);
+    v_res := v_res || (case when v_ok then 'PASS  6 storage: curve interpolation at 2.5 m between (2,2000)-(5,6000) = 2666.67'
+                            else 'FAIL  6 storage: curve interpolation  — got '
+                                 || coalesce((select storage_m3::text from public.tank_level_readings
+                                               where asset_id = v_tank and reading_date = v_d + 2), 'null') end);
+
+    v_ok := public.get_storage_m3(v_tank, 1) = 1000;
+    v_res := v_res || (case when v_ok then 'PASS  6 storage: get_storage_m3 direct call (level 1 → 1000)'
+                            else 'FAIL  6 storage: get_storage_m3 direct call  — got '
+                                 || coalesce(public.get_storage_m3(v_tank, 1)::text, 'null') end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('6 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  6 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------ 7. status propagation + alert
   begin
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
     values (v_p1, v_d + 6, v_d + 6, 0, 'ESTIMATE', 'STOPPED', v_admin);
-    insert into t_results (name, passed, detail) values
-      ('7 status: asset current_status follows latest reading (STOPPED)',
-         (select current_status = 'STOPPED' from public.water_assets where id = v_well1), null),
-      ('7 status: SOURCE_STOPPED alert raised',
-         exists (select 1 from public.alerts where alert_type = 'SOURCE_STOPPED' and asset_id = v_well1 and reference_date = v_d + 6), null);
-    -- an older reading must not overwrite a newer status
+
+    v_ok := (select current_status = 'STOPPED' from public.water_assets where id = v_well1);
+    v_res := v_res || (case when v_ok then 'PASS  7 status: asset current_status follows the latest reading (STOPPED)'
+                            else 'FAIL  7 status: asset current_status follows the latest reading  — got '
+                                 || (select current_status from public.water_assets where id = v_well1) end);
+
+    v_ok := exists (select 1 from public.alerts where alert_type = 'SOURCE_STOPPED'
+                      and asset_id = v_well1 and reference_date = v_d + 6);
+    v_res := v_res || (case when v_ok then 'PASS  7 status: SOURCE_STOPPED alert raised'
+                            else 'FAIL  7 status: SOURCE_STOPPED alert raised' end);
+
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
     values (v_p1, v_d + 3, v_d + 3, 1100, 'METER_DISPLAY', 'OPERATING', v_admin);
-    insert into t_results (name, passed, detail) values
-      ('7 status: older reading does not overwrite newer status',
-         (select current_status = 'STOPPED' from public.water_assets where id = v_well1), null);
+    v_ok := (select current_status = 'STOPPED' from public.water_assets where id = v_well1);
+    v_res := v_res || (case when v_ok then 'PASS  7 status: an older reading does not overwrite a newer status'
+                            else 'FAIL  7 status: an older reading does not overwrite a newer status' end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('7 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  7 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------------- 8. abnormal-reading flag
@@ -410,52 +526,72 @@ begin
     end loop;
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
     values (v_p2, v_d + 18, v_d + 18, 5000, 'METER_DISPLAY', v_admin) returning id into v_r3;
-    insert into t_results (name, passed, detail) values
-      ('8 abnormal: 5000 after 8×1000 → FLAGGED, not rejected',
-         (select validation_status = 'FLAGGED' from public.readings where id = v_r3),
-         (select validation_notes from public.readings where id = v_r3)),
-      ('8 abnormal: ABNORMAL_READING alert raised',
-         exists (select 1 from public.alerts where alert_type = 'ABNORMAL_READING' and reading_id = v_r3), null),
-      ('8 abnormal: normal value is not flagged',
-         (select bool_and(validation_status = 'OK') from public.readings where measurement_point_id = v_p2 and covers_from between v_d + 10 and v_d + 17), null);
+
+    v_ok := (select validation_status = 'FLAGGED' from public.readings where id = v_r3);
+    v_res := v_res || (case when v_ok then 'PASS  8 abnormal: 5000 after 8×1000 → FLAGGED, not rejected'
+                            else 'FAIL  8 abnormal: 5000 after 8×1000 → FLAGGED  — got '
+                                 || (select validation_status from public.readings where id = v_r3) end);
+
+    v_ok := exists (select 1 from public.alerts where alert_type = 'ABNORMAL_READING' and reading_id = v_r3);
+    v_res := v_res || (case when v_ok then 'PASS  8 abnormal: ABNORMAL_READING alert raised'
+                            else 'FAIL  8 abnormal: ABNORMAL_READING alert raised' end);
+
+    v_ok := (select bool_and(validation_status = 'OK') from public.readings
+              where measurement_point_id = v_p2 and covers_from between v_d + 10 and v_d + 17);
+    v_res := v_res || (case when v_ok then 'PASS  8 abnormal: normal values are not flagged'
+                            else 'FAIL  8 abnormal: normal values are not flagged' end);
   exception when others then
-    insert into t_results (name, passed, detail) values ('8 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  8 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------- 9. management scope (positive control)
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
     select count(*) into v_n from public.measurement_points;
-    insert into t_results (name, passed, detail) values ('9 admin: sees all 11 points', v_n = 11, 'got ' || v_n);
+    v_ok := v_n = 11;
+    v_res := v_res || (case when v_ok then 'PASS  9 admin: sees all 11 measurement points'
+                            else 'FAIL  9 admin: sees all 11 measurement points  — got ' || v_n end);
+
     select count(*) into v_n from public.alerts where status = 'OPEN';
-    insert into t_results (name, passed, detail) values ('9 admin: sees open alerts (>=4)', v_n >= 4, 'got ' || v_n);
+    v_ok := v_n >= 4;
+    v_res := v_res || (case when v_ok then 'PASS  9 admin: sees open alerts (>=4)'
+                            else 'FAIL  9 admin: sees open alerts (>=4)  — got ' || v_n end);
+
     update public.readings set validation_status = 'REVIEWED', validation_notes = 'checked' where id = v_r3;
     get diagnostics v_n = row_count;
-    insert into t_results (name, passed, detail) values ('9 admin: may update validation fields (1 row)', v_n = 1, 'rows=' || v_n);
+    v_ok := v_n = 1;
+    v_res := v_res || (case when v_ok then 'PASS  9 admin: may update validation fields (1 row)'
+                            else 'FAIL  9 admin: may update validation fields  — rows=' || v_n end);
+
     begin
       update public.readings set volume_m3 = 1 where id = v_r3;
-      insert into t_results (name, passed, detail) values ('9 admin: still cannot edit volume (immutability)', false, 'was allowed');
+      v_res := v_res || 'FAIL  9 admin: still cannot edit volume (immutability)  — was allowed';
     exception when others then
-      insert into t_results (name, passed, detail) values ('9 admin: still cannot edit volume (immutability)', true, sqlerrm);
+      v_res := v_res || 'PASS  9 admin: still cannot edit volume (immutability)';
     end;
+
     select count(*) into v_n from public.audit_logs;
-    insert into t_results (name, passed, detail) values ('9 admin: reads audit_logs (>0)', v_n > 0, 'got ' || v_n);
+    v_ok := v_n > 0;
+    v_res := v_res || (case when v_ok then 'PASS  9 admin: reads audit_logs (>0)'
+                            else 'FAIL  9 admin: reads audit_logs (>0)  — got ' || v_n end);
+
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
   exception when others then
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
-    insert into t_results (name, passed, detail) values ('9 section crashed', false, sqlerrm);
+    v_res := v_res || ('FAIL  9 section crashed  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ---------------------------------------------------------------- report
-  select count(*), count(*) filter (where not passed) into v_total, v_fail from t_results;
-  select string_agg(format('%s  %s%s', case when passed then 'PASS' else 'FAIL' end, name,
-                           case when passed then '' else coalesce('  — ' || detail, '') end), E'\n' order by seq)
-    into v_report from t_results;
+  -- Guard: a crashed section means its checks never ran — that is not a pass.
+  v_total := coalesce(array_length(v_res, 1), 0);
+  select count(*) into v_fail  from unnest(v_res) x where x like 'FAIL%';
+  select count(*) into v_crash from unnest(v_res) x where x like 'FAIL%section crashed%';
 
-  raise exception E'TEST REPORT — % failed of % checks. All test data rolled back (expected).\n%',
-    v_fail, v_total, v_report;
+  raise exception E'TEST REPORT — % failed of % checks (% crashed sections). All test data rolled back (expected).\n%',
+    v_fail, v_total, v_crash, array_to_string(v_res, E'\n');
 end;
 $$;

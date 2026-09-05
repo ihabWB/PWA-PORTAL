@@ -7,6 +7,10 @@ Hosted Supabase project, applied **manually from the SQL Editor** (no CLI, no ac
 Run each file in `migrations/` in numeric order, one at a time, and confirm "Success" before the
 next. Every file is re-runnable: running one twice is harmless.
 
+**One exception to the order:** `0013` must run before `0012`. The audit trigger shipped in `0009`
+broke every insert into a table without an `id` column, which made `0012` fail and roll back; `0013`
+fixes the trigger. On a fresh database: 0001…0011, then 0013, then 0012.
+
 | #    | File                              | What it does                                                                                                                                               |
 | ---- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0001 | `0001_extensions_and_common.sql`  | PostGIS, btree_gist, `app` helper schema, `updated_at` helper, revoke `anon`                                                                               |
@@ -44,8 +48,14 @@ After all 13 files succeed, paste [`tests/functional_test.sql`](tests/functional
 Editor and run it. It creates a throw-away FIELD_TEAM user, inserts readings, corrections, tank levels,
 impersonates users with `set role authenticated`, and then **rolls everything back on purpose** by
 ending with `RAISE EXCEPTION`. The editor therefore shows a red error box whose message begins with
-`TEST REPORT — N failed of M checks` followed by one `PASS`/`FAIL` line per check. Zero failures is
-the goal; send the full message back if any line says `FAIL`.
+`TEST REPORT — N failed of M checks (K crashed sections)` followed by one `PASS`/`FAIL` line per
+check. Zero failures **and zero crashed sections** is the goal; send the full message back if any
+line says `FAIL`.
+
+A crashed section means its checks never ran — that is a gap in coverage, not a pass. Results are
+therefore accumulated in a PL/pgSQL array variable rather than a table: sections 4, 5 and 9 execute
+under `set local role authenticated`, and a switched role has no write privilege on a temp table
+owned by the session user, which previously made the whole RLS section abort.
 
 ## Rules baked into the schema
 
