@@ -69,14 +69,17 @@ These are violated most often. Check against them before every commit.
 ## Running locally
 
 ```
-cp .env.example .env.local   # fill in Supabase URL + anon key
+cp .env.example .env.local   # fill in Supabase URL + publishable key (sb_publishable_...)
 npm install
 npm run dev                  # http://localhost:3000
 npm run typecheck && npm run lint && npm run check:rtl && npm run build
 ```
 
 Supabase is a hosted project (no local CLI/Docker). Deployment target is Vercel; set the same
-env vars there. Next.js 16 uses `src/proxy.ts` (formerly `middleware.ts`) for session refresh
+env vars there. The project uses Supabase's **new API keys**: only the publishable key
+(`NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) is used, on client and server alike. **Never use a
+secret key (`sb_secret_...`) anywhere** — it bypasses RLS. If a task seems to need it, stop and
+ask first. Next.js 16 uses `src/proxy.ts` (formerly `middleware.ts`) for session refresh
 and the auth gate.
 
 ## Conventions
