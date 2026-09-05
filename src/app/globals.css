@@ -1,0 +1,105 @@
+/*
+ * Application design-token layer.
+ * HeroUI v3 ships its theme as CSS variables on :root; every override below is inherited
+ * by all HeroUI components, so nothing renders in HeroUI's default look.
+ * Physical directions (left/right, ml-*, pr-*) are forbidden — logical properties only.
+ */
+@import "@heroui/styles";
+
+@theme {
+  --font-sans: var(--font-plex-arabic), "IBM Plex Sans Arabic", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "Consolas", monospace;
+
+  /* Application-specific semantic colors exposed as Tailwind utilities (bg-status-*, text-supply-*). */
+  --color-status-operating: var(--status-operating);
+  --color-status-partial: var(--status-partial);
+  --color-status-stopped: var(--status-stopped);
+  --color-status-maintenance: var(--status-maintenance);
+  --color-status-damaged: var(--status-damaged);
+  --color-status-unknown: var(--status-unknown);
+  --color-supply-groundwater: var(--supply-groundwater);
+  --color-supply-israeli: var(--supply-israeli);
+}
+
+:root {
+  /* Brand — water teal instead of HeroUI's saturated blue */
+  --accent: oklch(0.52 0.11 205);
+  --accent-foreground: oklch(0.99 0 0);
+  --focus: var(--accent);
+  --link: var(--accent);
+
+  /* Surfaces — cool light background, white surfaces with visible borders for dense tables */
+  --background: oklch(0.975 0.004 220);
+  --foreground: oklch(0.22 0.02 235);
+  --surface: oklch(1 0 0);
+  --surface-foreground: var(--foreground);
+  --overlay: oklch(1 0 0);
+  --overlay-foreground: var(--foreground);
+  --muted: oklch(0.5 0.02 235);
+  --default: oklch(0.945 0.006 220);
+  --default-foreground: var(--foreground);
+  --border: oklch(0.88 0.008 220);
+  --separator: oklch(0.91 0.006 220);
+  --border-width: 1px;
+  --field-border-width: 1px;
+  --field-border: var(--border);
+  --field-background: var(--surface);
+  --field-foreground: var(--foreground);
+  --field-shadow: none;
+  --surface-shadow: none;
+
+  /* Status — mirrors operational status semantics */
+  --success: oklch(0.62 0.15 150); /* OPERATING */
+  --success-foreground: oklch(0.99 0 0);
+  --warning: oklch(0.75 0.15 75); /* PARTIALLY_OPERATING / MAINTENANCE */
+  --warning-foreground: oklch(0.22 0.02 235);
+  --danger: oklch(0.58 0.2 27); /* STOPPED / DAMAGED */
+  --danger-foreground: oklch(0.99 0 0);
+
+  /* Shape & density — calmer radius than the default, suited to an operational UI */
+  --radius: 0.375rem;
+  --field-radius: var(--radius);
+
+  /* Application tokens consumed later by charts and the map */
+  --status-operating: var(--success);
+  --status-partial: var(--warning);
+  --status-stopped: var(--danger);
+  --status-maintenance: oklch(0.65 0.12 60);
+  --status-damaged: oklch(0.45 0.18 27);
+  --status-unknown: oklch(0.6 0.01 235);
+  --supply-groundwater: oklch(0.52 0.11 205);
+  --supply-israeli: oklch(0.55 0.12 290);
+
+  /* Layout */
+  --sidebar-width: 16.5rem;
+  --topbar-height: 3.5rem;
+}
+
+.dark,
+[data-theme="dark"] {
+  --background: oklch(0.16 0.01 235);
+  --foreground: oklch(0.95 0.005 220);
+  --surface: oklch(0.21 0.012 235);
+  --overlay: oklch(0.23 0.012 235);
+  --default: oklch(0.27 0.012 235);
+  --border: oklch(0.32 0.012 235);
+  --separator: oklch(0.28 0.01 235);
+  --muted: oklch(0.7 0.015 235);
+  --accent: oklch(0.7 0.11 205);
+  --accent-foreground: oklch(0.15 0.02 235);
+  --field-background: var(--surface);
+  --warning-foreground: oklch(0.15 0.02 235);
+}
+
+html {
+  /* Tabular figures: numbers align in dense operational tables. */
+  font-feature-settings: "tnum" 1;
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  min-height: 100dvh;
+}
