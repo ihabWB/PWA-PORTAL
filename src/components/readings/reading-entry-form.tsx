@@ -142,46 +142,53 @@ export function ReadingEntryForm({
       )}
 
       {/* The covered day is editable so a late entry lands on the right day. */}
-      <div className="grid grid-cols-2 gap-3">
-        <Controller
-          control={control}
-          name="coversFrom"
-          render={({ field, fieldState }) => (
-            <TextField
-              name={field.name}
-              value={field.value ?? ""}
-              onChange={field.onChange}
-              onBlur={field.onBlur}
-              isInvalid={fieldState.invalid}
-              type="date"
-              isRequired
-            >
-              <Label>{t("coveredDayLabel")}</Label>
-              <Input max={maxDate} />
-              {fieldState.error?.message && <FieldError>{tr(fieldState.error.message)}</FieldError>}
-            </TextField>
-          )}
-        />
-        <Controller
-          control={control}
-          name="coversTo"
-          render={({ field, fieldState }) => (
-            <TextField
-              name={field.name}
-              value={field.value ?? ""}
-              onChange={field.onChange}
-              onBlur={field.onBlur}
-              isInvalid={fieldState.invalid}
-              type="date"
-              isRequired
-            >
-              <Label>{tc("of")}</Label>
-              <Input max={maxDate} />
-              {fieldState.error?.message && <FieldError>{tr(fieldState.error.message)}</FieldError>}
-            </TextField>
-          )}
-        />
-      </div>
+      <fieldset className="flex flex-col gap-2">
+        <legend className="text-muted mb-1 text-sm">{t("coveredDayLabel")}</legend>
+        <div className="grid grid-cols-2 gap-3">
+          <Controller
+            control={control}
+            name="coversFrom"
+            render={({ field, fieldState }) => (
+              <TextField
+                name={field.name}
+                value={field.value ?? ""}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                isInvalid={fieldState.invalid}
+                type="date"
+                isRequired
+              >
+                <Label>{t("coversFrom")}</Label>
+                <Input max={maxDate} />
+                {fieldState.error?.message && (
+                  <FieldError>{tr(fieldState.error.message)}</FieldError>
+                )}
+              </TextField>
+            )}
+          />
+          <Controller
+            control={control}
+            name="coversTo"
+            render={({ field, fieldState }) => (
+              <TextField
+                name={field.name}
+                value={field.value ?? ""}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                isInvalid={fieldState.invalid}
+                type="date"
+                isRequired
+              >
+                <Label>{t("coversTo")}</Label>
+                <Input max={maxDate} />
+                {fieldState.error?.message && (
+                  <FieldError>{tr(fieldState.error.message)}</FieldError>
+                )}
+              </TextField>
+            )}
+          />
+        </div>
+      </fieldset>
 
       <Controller
         control={control}

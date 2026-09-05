@@ -71,9 +71,9 @@ export async function TaskList({ list, locale }: TaskListProps) {
                     <span className="flex shrink-0 items-center gap-2">
                       {entered ? (
                         <>
-                          {task.validationStatus === "FLAGGED" && (
+                          {task.validationStatus !== null && task.validationStatus !== "OK" && (
                             <Chip size="sm" variant="soft" color="warning">
-                              {tv("FLAGGED")}
+                              {tv(task.validationStatus)}
                             </Chip>
                           )}
                           <span className="font-mono text-sm whitespace-nowrap">

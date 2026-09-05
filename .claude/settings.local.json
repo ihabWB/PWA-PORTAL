@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/check-i18n.mjs)",
+      "Bash(python -)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"console.log\\(JSON.stringify\\(require\\('./package.json'\\).scripts,null,1\\)\\)\")",
+      "Bash(npx prettier *)",
+      "Bash(npx tsc *)",
+      "Bash(npx eslint *)",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'fix\\(i18n\\): check keys from the code, not by comparing the two locale files *)",
+      "Bash(git push *)"
+    ]
+  }
+}

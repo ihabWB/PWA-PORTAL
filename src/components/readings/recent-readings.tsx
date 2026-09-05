@@ -44,9 +44,9 @@ export async function RecentReadings({ readings, locale }: RecentReadingsProps) 
                   )}
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
-                  {r.validationStatus === "FLAGGED" && (
+                  {r.validationStatus !== "OK" && (
                     <Chip size="sm" variant="soft" color="warning">
-                      {tv("FLAGGED")}
+                      {tv(r.validationStatus)}
                     </Chip>
                   )}
                   <span className="font-mono text-sm whitespace-nowrap tabular-nums">

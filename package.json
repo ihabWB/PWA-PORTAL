@@ -12,7 +12,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:rtl": "node scripts/check-rtl.mjs",
-    "db:bundle": "node scripts/bundle-sql.mjs"
+    "db:bundle": "node scripts/bundle-sql.mjs",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check": "npm run check:i18n && npm run check:rtl && npm run typecheck && npm run lint",
+    "prebuild": "npm run check:i18n && npm run check:rtl"
   },
   "dependencies": {
     "@heroui/react": "3.2.4",

@@ -5,26 +5,18 @@
     "tagline": "Monitoring sources, pumping, storage and water balance"
   },
   "common": {
-    "loading": "Loading…",
-    "save": "Save",
-    "cancel": "Cancel",
     "back": "Back",
     "signOut": "Sign out",
     "language": "Language",
     "arabic": "العربية",
     "english": "English",
     "unitM3": "m³",
-    "notAvailable": "N/A",
-    "retry": "Retry",
     "previousDay": "Previous day",
     "nextDay": "Next day",
-    "noData": "No data",
-    "edit": "Edit",
     "saving": "Saving…",
     "optional": "optional"
   },
   "nav": {
-    "home": "Home",
     "saeer": "Arrivals at Saeer",
     "fieldEntry": "Daily entry",
     "readings": "Readings",
@@ -53,13 +45,6 @@
       "subtitle": "You are signed in as {email}.",
       "body": "You cannot view or enter data until an administrator activates your account and assigns your role, areas or measurement points. Contact Water Management."
     }
-  },
-  "home": {
-    "welcome": "Welcome, {name}",
-    "todayIs": "Today is {date}",
-    "stageNotice": "Stage 1 — Foundation complete. Operational screens are built in the following stages per SPEC.md.",
-    "sampleFigure": "Number rendering sample: {volume} {unit}",
-    "sampleCompleteness": "Data completeness {reported} / {expected} measurement points"
   },
   "setup": {
     "title": "Setup incomplete",
@@ -95,7 +80,6 @@
     "REVIEWED": "Reviewed"
   },
   "saeer": {
-    "title": "Arrivals at the Saeer intermediate tank",
     "pumped": "Pumped from sources",
     "groundwater": "Groundwater wells",
     "israeli": "Israeli connections",
@@ -109,8 +93,7 @@
     "noStoppedSources": "None",
     "reportedOf": "{reported} of {total}",
     "gapWarning": "Incomplete data: {missing} measurement points did not report. The figures below are a floor, not a final answer.",
-    "noOfftakeMeters": "No route take-off meters are read daily, so the whole difference is shown as unexplained.",
-    "zoneMissing": "The balance zone is missing from the database."
+    "noOfftakeMeters": "No route take-off meters are read daily, so the whole difference is shown as unexplained."
   },
   "entry": {
     "title": "Daily entry",
@@ -123,7 +106,6 @@
     "allDone": "Every point has been entered for this day.",
     "noTasks": "No measurement points are assigned to you.",
     "assigned": "Assigned to you",
-    "open": "Enter",
     "volume": "Volume in cubic metres",
     "volumeHelp": "The total volume for the period, not a flow rate.",
     "status": "Source status on that day",
@@ -140,7 +122,9 @@
     "savedFlagged": "Saved and flagged for review because it is far from the usual range. It was not rejected or altered.",
     "correcting": "Correcting an earlier reading. The old reading is kept, never deleted.",
     "alreadyEntered": "A reading already exists for this day. A correction creates a new row.",
-    "correct": "Correct"
+    "correct": "Correct",
+    "coversFrom": "From day",
+    "coversTo": "To day"
   },
   "reading": {
     "errors": {
