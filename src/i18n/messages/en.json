@@ -14,7 +14,14 @@
     "arabic": "العربية",
     "english": "English",
     "unitM3": "m³",
-    "notAvailable": "N/A"
+    "notAvailable": "N/A",
+    "retry": "Retry",
+    "previousDay": "Previous day",
+    "nextDay": "Next day",
+    "noData": "No data",
+    "edit": "Edit",
+    "saving": "Saving…",
+    "optional": "optional"
   },
   "nav": {
     "home": "Home",
@@ -57,5 +64,110 @@
   "setup": {
     "title": "Setup incomplete",
     "body": "Supabase keys are not configured. Copy .env.example to .env.local, fill in the values and restart."
+  },
+  "status": {
+    "OPERATING": "Operating",
+    "PARTIALLY_OPERATING": "Partially operating",
+    "STOPPED": "Stopped",
+    "MAINTENANCE": "Maintenance",
+    "DAMAGED": "Damaged",
+    "UNKNOWN": "Unknown"
+  },
+  "entryBasis": {
+    "label": "How the number was obtained",
+    "METER_DISPLAY": "Meter display",
+    "METER_DIFF": "Difference of two readings",
+    "PUMP_HOURS": "Pump hours",
+    "ESTIMATE": "Estimate"
+  },
+  "assetType": {
+    "WELL": "Well",
+    "ISRAELI_CONNECTION": "Israeli connection",
+    "TANK": "Tank",
+    "RESERVOIR": "Reservoir",
+    "PUMPING_STATION": "Pumping station",
+    "MAIN_METER": "Main meter",
+    "SERVICE_PROVIDER": "Service provider"
+  },
+  "validation": {
+    "FLAGGED": "Flagged for review",
+    "UNDER_REVIEW": "Under review",
+    "REVIEWED": "Reviewed"
+  },
+  "saeer": {
+    "title": "Arrivals at the Saeer intermediate tank",
+    "pumped": "Pumped from sources",
+    "groundwater": "Groundwater wells",
+    "israeli": "Israeli connections",
+    "arrival": "Arrived at Saeer",
+    "difference": "Difference",
+    "measuredOfftakes": "Measured take-offs",
+    "unexplained": "Unexplained",
+    "completeness": "Data completeness",
+    "completenessValue": "{reported} / {expected} measurement points",
+    "stoppedSources": "Stopped sources",
+    "noStoppedSources": "None",
+    "reportedOf": "{reported} of {total}",
+    "gapWarning": "Incomplete data: {missing} measurement points did not report. The figures below are a floor, not a final answer.",
+    "noOfftakeMeters": "No route take-off meters are read daily, so the whole difference is shown as unexplained.",
+    "zoneMissing": "The balance zone is missing from the database."
+  },
+  "entry": {
+    "title": "Daily entry",
+    "subtitle": "Enter the volume in cubic metres for the operational day shown.",
+    "coveredDay": "Pumping for {date}",
+    "coveredDayLabel": "Day covered by this reading",
+    "pending": "Awaiting entry",
+    "done": "Entered",
+    "progress": "{done} of {total} points",
+    "allDone": "Every point has been entered for this day.",
+    "noTasks": "No measurement points are assigned to you.",
+    "assigned": "Assigned to you",
+    "open": "Enter",
+    "volume": "Volume in cubic metres",
+    "volumeHelp": "The total volume for the period, not a flow rate.",
+    "status": "Source status on that day",
+    "cumulativeIndex": "Cumulative meter index",
+    "cumulativeIndexHelp": "Optional. Used for an independent cross-check later.",
+    "pumpHours": "Pump hours",
+    "notes": "Note",
+    "submit": "Save reading",
+    "recent": "Recent readings",
+    "recentEmpty": "No previous readings for this point.",
+    "perDay": "{value} / day",
+    "multiDay": "{days} days",
+    "savedTitle": "Reading saved",
+    "savedFlagged": "Saved and flagged for review because it is far from the usual range. It was not rejected or altered.",
+    "correcting": "Correcting an earlier reading. The old reading is kept, never deleted.",
+    "alreadyEntered": "A reading already exists for this day. A correction creates a new row.",
+    "correct": "Correct"
+  },
+  "reading": {
+    "errors": {
+      "dateInvalid": "Invalid date",
+      "idInvalid": "Invalid reading id",
+      "pointInvalid": "Invalid measurement point",
+      "volumeRequired": "Enter the volume in cubic metres",
+      "volumeNegative": "Volume cannot be negative",
+      "volumeTooLarge": "That volume is implausibly large",
+      "indexNegative": "Meter index cannot be negative",
+      "basisRequired": "Choose how the number was obtained",
+      "statusRequired": "Choose the source status",
+      "periodReversed": "The end date is before the start date",
+      "periodInFuture": "A reading cannot cover a future day",
+      "periodTooLong": "The covered period is too long",
+      "pumpHoursRequired": "Enter the pump hours, since that is the basis of the number",
+      "alreadyEntered": "An active reading already exists for that day on this point",
+      "periodOverlaps": "The period overlaps another reading on this point",
+      "notPermitted": "You do not have permission to enter readings on this point",
+      "saveFailed": "Could not save the reading. Please try again."
+    }
+  },
+  "errors": {
+    "title": "Could not load the data",
+    "migrationMissing": "The database is missing a migration. Apply the latest files in supabase/migrations and retry.",
+    "notPermitted": "You do not have permission to view this data.",
+    "queryFailed": "The query failed. This does not mean the values are zero.",
+    "zoneMissing": "The balance zone is missing from the database."
   }
 }

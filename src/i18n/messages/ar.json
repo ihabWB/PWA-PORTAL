@@ -14,7 +14,14 @@
     "arabic": "العربية",
     "english": "English",
     "unitM3": "م³",
-    "notAvailable": "غير متوفر"
+    "notAvailable": "غير متوفر",
+    "retry": "إعادة المحاولة",
+    "previousDay": "اليوم السابق",
+    "nextDay": "اليوم التالي",
+    "noData": "لا توجد بيانات",
+    "edit": "تعديل",
+    "saving": "جارٍ الحفظ…",
+    "optional": "اختياري"
   },
   "nav": {
     "home": "الرئيسية",
@@ -57,5 +64,110 @@
   "setup": {
     "title": "الإعداد غير مكتمل",
     "body": "لم تُضبط مفاتيح Supabase. انسخ .env.example إلى .env.local وأدخل القيم ثم أعد التشغيل."
+  },
+  "status": {
+    "OPERATING": "يعمل",
+    "PARTIALLY_OPERATING": "يعمل جزئيًا",
+    "STOPPED": "متوقف",
+    "MAINTENANCE": "صيانة",
+    "DAMAGED": "معطّل",
+    "UNKNOWN": "غير معروف"
+  },
+  "entryBasis": {
+    "label": "مصدر الرقم",
+    "METER_DISPLAY": "شاشة العداد",
+    "METER_DIFF": "فرق قراءتين",
+    "PUMP_HOURS": "ساعات الضخ",
+    "ESTIMATE": "تقدير"
+  },
+  "assetType": {
+    "WELL": "بئر",
+    "ISRAELI_CONNECTION": "وصلة إسرائيلية",
+    "TANK": "خزان",
+    "RESERVOIR": "خزان رئيسي",
+    "PUMPING_STATION": "محطة ضخ",
+    "MAIN_METER": "عداد رئيسي",
+    "SERVICE_PROVIDER": "مزوّد خدمة"
+  },
+  "validation": {
+    "FLAGGED": "مُعلَّمة للمراجعة",
+    "UNDER_REVIEW": "قيد المراجعة",
+    "REVIEWED": "روجعت"
+  },
+  "saeer": {
+    "title": "الواصل إلى الخزان الوسيط — سعير",
+    "pumped": "المضخوخ من المصادر",
+    "groundwater": "آبار جوفية",
+    "israeli": "وصلات إسرائيلية",
+    "arrival": "الواصل إلى سعير",
+    "difference": "الفرق",
+    "measuredOfftakes": "مسحوبات مقيسة",
+    "unexplained": "غير مفسَّر",
+    "completeness": "اكتمال البيانات",
+    "completenessValue": "{reported} / {expected} نقطة قياس",
+    "stoppedSources": "مصادر متوقفة",
+    "noStoppedSources": "لا يوجد",
+    "reportedOf": "{reported} من {total}",
+    "gapWarning": "نقص في البيانات: {missing} نقطة قياس لم تُبلّغ. الأرقام أدناه حد أدنى وليست نهائية.",
+    "noOfftakeMeters": "لا توجد عدادات مسحوبات تُقرأ يوميًا، لذلك يظهر الفرق كاملًا كغير مفسَّر.",
+    "zoneMissing": "منطقة الموازنة غير موجودة في قاعدة البيانات."
+  },
+  "entry": {
+    "title": "الإدخال اليومي",
+    "subtitle": "أدخل حجم المياه بالمتر المكعب لليوم التشغيلي المذكور.",
+    "coveredDay": "ضخ يوم {date}",
+    "coveredDayLabel": "اليوم الذي تغطيه القراءة",
+    "pending": "بانتظار الإدخال",
+    "done": "تم الإدخال",
+    "progress": "{done} من {total} نقطة",
+    "allDone": "اكتمل إدخال كل النقاط لهذا اليوم.",
+    "noTasks": "لا توجد نقاط قياس مسندة إليك.",
+    "assigned": "مسندة إليك",
+    "open": "إدخال",
+    "volume": "الحجم بالمتر المكعب",
+    "volumeHelp": "الحجم الكلي للفترة، وليس معدل التدفق.",
+    "status": "حالة المصدر في ذلك اليوم",
+    "cumulativeIndex": "قراءة العداد التراكمية",
+    "cumulativeIndexHelp": "اختياري. تُستخدم للتحقق المستقل لاحقًا.",
+    "pumpHours": "ساعات الضخ",
+    "notes": "ملاحظة",
+    "submit": "حفظ القراءة",
+    "recent": "آخر القراءات",
+    "recentEmpty": "لا توجد قراءات سابقة لهذه النقطة.",
+    "perDay": "{value} / يوم",
+    "multiDay": "{days} أيام",
+    "savedTitle": "تم حفظ القراءة",
+    "savedFlagged": "حُفظت القراءة وعُلِّمت للمراجعة لأنها بعيدة عن المعتاد. لم تُرفض ولم تُعدَّل.",
+    "correcting": "تصحيح قراءة سابقة. القراءة القديمة تُحفظ ولا تُحذف.",
+    "alreadyEntered": "أُدخلت قراءة لهذا اليوم بالفعل. التصحيح يُنشئ صفًا جديدًا.",
+    "correct": "تصحيح"
+  },
+  "reading": {
+    "errors": {
+      "dateInvalid": "التاريخ غير صحيح",
+      "idInvalid": "معرّف القراءة غير صحيح",
+      "pointInvalid": "نقطة القياس غير صحيحة",
+      "volumeRequired": "أدخل الحجم بالمتر المكعب",
+      "volumeNegative": "الحجم لا يمكن أن يكون سالبًا",
+      "volumeTooLarge": "الحجم كبير بشكل غير معقول",
+      "indexNegative": "قراءة العداد لا يمكن أن تكون سالبة",
+      "basisRequired": "اختر مصدر الرقم",
+      "statusRequired": "اختر حالة المصدر",
+      "periodReversed": "تاريخ النهاية قبل تاريخ البداية",
+      "periodInFuture": "لا يمكن إدخال قراءة ليوم لم يأتِ بعد",
+      "periodTooLong": "الفترة طويلة جدًا",
+      "pumpHoursRequired": "أدخل ساعات الضخ لأن مصدر الرقم هو ساعات الضخ",
+      "alreadyEntered": "توجد قراءة غير ملغاة لهذا اليوم على هذه النقطة",
+      "periodOverlaps": "الفترة تتداخل مع قراءة أخرى على هذه النقطة",
+      "notPermitted": "لا تملك صلاحية الإدخال على هذه النقطة",
+      "saveFailed": "تعذّر حفظ القراءة. حاول مرة أخرى."
+    }
+  },
+  "errors": {
+    "title": "تعذّر جلب البيانات",
+    "migrationMissing": "قاعدة البيانات ناقصة هجرة. طبّق أحدث ملفات supabase/migrations ثم أعد المحاولة.",
+    "notPermitted": "لا تملك صلاحية الاطلاع على هذه البيانات.",
+    "queryFailed": "فشل الاستعلام. لا يعني هذا أن البيانات صفر.",
+    "zoneMissing": "منطقة الموازنة غير موجودة في قاعدة البيانات."
   }
 }

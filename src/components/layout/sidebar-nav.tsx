@@ -10,9 +10,8 @@ import { usePathname } from "next/navigation";
  * SPEC.md build order and become real routes as each stage ships.
  */
 const NAV_ITEMS: ReadonlyArray<{ key: string; href: string; ready: boolean }> = [
-  { key: "home", href: "/", ready: true },
-  { key: "saeer", href: "/saeer", ready: false },
-  { key: "fieldEntry", href: "/field-entry", ready: false },
+  { key: "saeer", href: "/saeer", ready: true },
+  { key: "fieldEntry", href: "/field-entry", ready: true },
   { key: "readings", href: "/readings", ready: false },
   { key: "assets", href: "/assets", ready: false },
   { key: "map", href: "/map", ready: false },
@@ -24,9 +23,11 @@ export function SidebarNav() {
   const pathname = usePathname();
 
   return (
-    <nav aria-label={t("home")} className="flex flex-col gap-1 p-2">
+    <nav aria-label={t("saeer")} className="flex flex-col gap-1 p-2">
       {NAV_ITEMS.map((item) => {
-        const active = item.ready && pathname === item.href;
+        const active =
+          item.ready &&
+          (pathname === item.href || (item.href !== "/" && pathname.startsWith(`${item.href}/`)));
         const base =
           "flex items-center justify-between gap-2 rounded-(--radius) px-3 py-2 text-sm transition-colors";
         if (!item.ready) {
