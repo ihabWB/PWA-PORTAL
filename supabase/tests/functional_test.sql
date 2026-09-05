@@ -35,6 +35,7 @@ declare
   v_in uuid; v_out uuid; v_tank uuid; v_well1 uuid;
   v_d      date := date '2019-06-01';     -- far in the past: never collides with live data
   v_r1 uuid; v_r2 uuid; v_r3 uuid; v_r4 uuid;
+  v_new_asset uuid; v_new_point uuid; v_new_path uuid;
   v_old    public.readings%rowtype;
   v_bal    record;
   v_i      int;
@@ -750,6 +751,196 @@ begin
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
     v_res := array_append(v_res, 'FAIL  10 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
+  end;
+
+  -- ------------------- 11. Stage 5: asset management write path (0017/0018)
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
+    -- widened type constraints accept the anticipated future values without a new migration
+    begin
+      v_new_asset := public.upsert_water_asset(
+        null, 'chk-valve', 'محبس اختبار', null, 'VALVE', null,
+        (select id from public.areas where code = 'HEB'), 'OPERATING',
+        null, null, null, null, null, null, null, null, null, null);
+      v_res := array_append(v_res, 'PASS  11 types: a future asset type (VALVE) is accepted');
+    exception when others then
+      v_res := array_append(v_res, 'FAIL  11 types: a future asset type (VALVE) is accepted  — ' || sqlstate || ' ' || sqlerrm);
+    end;
+
+    v_ok := (select code = 'CHK-VALVE' from public.water_assets where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: the code is normalised to upper case'
+                                       else 'FAIL  11 assets: the code is normalised to upper case' end));
+
+    v_ok := (select geom is null from public.water_assets where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: no coordinates → geometry stays NULL (never invented)'
+                                       else 'FAIL  11 assets: no coordinates → geometry stays NULL' end));
+
+    begin
+      perform public.upsert_water_asset(
+        null, 'CHK-HALF', 'إحداثية ناقصة', null, 'VALVE', null, null, 'OPERATING',
+        35.1, null, null, null, null, null, null, null, null, null);
+      v_res := array_append(v_res, 'FAIL  11 assets: half a coordinate pair refused  — was accepted');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '22023' then 'PASS  11 assets: half a coordinate pair refused (22023)'
+                                         else 'FAIL  11 assets: half a coordinate pair  — wrong error ' || sqlstate end));
+    end;
+
+    begin
+      perform public.upsert_water_asset(
+        null, 'CHK-BADLL', 'إحداثية خارج المدى', null, 'VALVE', null, null, 'OPERATING',
+        999, 999, null, null, null, null, null, null, null, null);
+      v_res := array_append(v_res, 'FAIL  11 assets: out-of-range coordinates refused  — were accepted');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '22023' then 'PASS  11 assets: out-of-range coordinates refused (22023)'
+                                         else 'FAIL  11 assets: out-of-range coordinates  — wrong error ' || sqlstate end));
+    end;
+
+    -- update, including adding coordinates later
+    perform public.upsert_water_asset(
+      v_new_asset, 'CHK-VALVE', 'محبس اختبار معدّل', 'Test valve', 'VALVE', null,
+      (select id from public.areas where code = 'HEB'), 'MAINTENANCE',
+      35.155, 31.595, null, null, null, null, date '2020-01-01', null, null, null);
+    v_ok := (select name_ar = 'محبس اختبار معدّل' and current_status = 'MAINTENANCE' and geom is not null
+               from public.water_assets where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: update applies, coordinates can be added later'
+                                       else 'FAIL  11 assets: update applies, coordinates can be added later' end));
+
+    v_ok := (select round(longitude::numeric, 3) = 35.155 and round(latitude::numeric, 3) = 31.595
+               from public.get_asset_catalogue(true) where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: the catalogue reads longitude/latitude back correctly'
+                                       else 'FAIL  11 assets: the catalogue reads longitude/latitude back' end));
+
+    -- a measurement point of a future type, on that asset
+    begin
+      v_new_point := public.upsert_measurement_point(
+        null, 'chk-consumer', 'عداد مشترك اختبار', null, 'CONSUMER_METER',
+        v_new_asset, null, (select id from public.areas where code = 'HEB'), false, true);
+      v_res := array_append(v_res, 'PASS  11 types: a future point type (CONSUMER_METER) is accepted');
+    exception when others then
+      v_res := array_append(v_res, 'FAIL  11 types: a future point type (CONSUMER_METER)  — ' || sqlstate || ' ' || sqlerrm);
+    end;
+
+    v_ok := (select not expects_daily_reading from public.measurement_points where id = v_new_point);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 points: expects_daily_reading is stored as given'
+                                       else 'FAIL  11 points: expects_daily_reading is stored as given' end));
+
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d) where measurement_point_id = v_new_point;
+    v_ok := v_n = 0;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 points: a non-daily point never reaches the entry task list'
+                                       else 'FAIL  11 points: a non-daily point reached the entry task list' end));
+
+    begin
+      perform public.upsert_measurement_point(
+        null, 'CHK-ORPHAN', 'نقطة بلا أصل', null, 'SOURCE_METER', null, null, null, true, true);
+      v_res := array_append(v_res, 'FAIL  11 points: a point with neither asset nor path refused  — was accepted');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate in ('22023','23514') then 'PASS  11 points: a point with neither asset nor path refused'
+                                         else 'FAIL  11 points: orphan point  — wrong error ' || sqlstate end));
+    end;
+
+    -- topology as data
+    v_new_path := public.upsert_water_path(
+      null, v_new_asset, v_tank, 'PIPELINE', 5, 'خط اختبار', null, v_d, null, null);
+    v_ok := (select count(*) from public.get_asset_paths(v_new_asset) where direction = 'OUT') = 1;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 paths: a new path appears on the asset as outgoing'
+                                       else 'FAIL  11 paths: a new path appears on the asset as outgoing' end));
+
+    v_ok := (select count(*) from public.get_asset_paths(v_tank) where direction = 'IN' and other_asset_id = v_new_asset) = 1;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 paths: the same path appears on the far asset as incoming'
+                                       else 'FAIL  11 paths: the same path appears on the far asset as incoming' end));
+
+    begin
+      perform public.upsert_water_path(null, v_new_asset, v_new_asset, 'PIPELINE', 1, null, null, v_d, null, null);
+      v_res := array_append(v_res, 'FAIL  11 paths: a self-loop refused  — was accepted');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate in ('22023','23514') then 'PASS  11 paths: a self-loop refused'
+                                         else 'FAIL  11 paths: self-loop  — wrong error ' || sqlstate end));
+    end;
+
+    -- retire, never delete
+    perform public.retire_water_asset(v_new_asset, date '2021-03-01', 'STOPPED', 'خرج من الخدمة للاختبار');
+    v_ok := (select operational_end_date = date '2021-03-01' and current_status = 'STOPPED'
+               from public.water_assets where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: end date and status set, row kept'
+                                       else 'FAIL  11 retire: end date and status set' end));
+
+    v_ok := (select is_retired from public.get_asset_catalogue(true) where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: the catalogue marks it retired'
+                                       else 'FAIL  11 retire: the catalogue marks it retired' end));
+
+    select count(*) into v_n from public.get_asset_catalogue(false) where id = v_new_asset;
+    v_ok := v_n = 0;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: it drops out of the active-only catalogue'
+                                       else 'FAIL  11 retire: it drops out of the active-only catalogue' end));
+
+    begin
+      delete from public.water_assets where id = v_new_asset;
+      v_res := array_append(v_res, 'FAIL  11 retire: DELETE on an asset refused  — the delete succeeded');
+    exception when others then
+      v_res := array_append(v_res, 'PASS  11 retire: DELETE on an asset refused (' || sqlstate || ')');
+    end;
+
+    perform public.reinstate_water_asset(v_new_asset, 'OPERATING');
+    v_ok := (select operational_end_date is null from public.water_assets where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: reinstating clears the end date'
+                                       else 'FAIL  11 retire: reinstating clears the end date' end));
+
+    -- placeholder inventory
+    select count(*) into v_n from public.get_placeholder_rows();
+    v_ok := v_n = 24;   -- 12 seeded assets + their 12 measurement points
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: all 24 seeded TMP rows are listed'
+                                       else 'FAIL  11 placeholders: all 24 seeded TMP rows are listed  — got ' || v_n end));
+
+    v_ok := not exists (select 1 from public.get_placeholder_rows() where id = v_new_asset);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: a real asset is not listed as a placeholder'
+                                       else 'FAIL  11 placeholders: a real asset was listed as a placeholder' end));
+
+    v_ok := (select bool_and(is_placeholder) from public.get_asset_catalogue(true)
+              where code like '%TMP%');
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: the catalogue flags every seeded row'
+                                       else 'FAIL  11 placeholders: the catalogue flags every seeded row' end));
+
+    -- renaming a placeholder to a real code clears the flag without touching its readings
+    perform public.upsert_water_asset(
+      (select id from public.water_assets where code = 'W-TMP-01'),
+      'W-BANI-NAIM-2', 'بئر بني نعيم 2', 'Bani Naim well 2', 'WELL', 'GROUNDWATER',
+      (select id from public.areas where code = 'HEB'), 'OPERATING',
+      35.16, 31.52, null, null, null, null, null, null, null, null);
+    v_ok := (select not is_placeholder and reading_count > 0
+               from public.get_asset_catalogue(true) where code = 'W-BANI-NAIM-2');
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: renaming a seed asset keeps its readings and clears the flag'
+                                       else 'FAIL  11 placeholders: renaming a seed asset keeps its readings and clears the flag' end));
+
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+
+    -- a field worker may not create or retire assets
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
+    begin
+      perform public.upsert_water_asset(
+        null, 'CHK-HACK', 'اختراق', null, 'WELL', 'GROUNDWATER', null, 'OPERATING',
+        null, null, null, null, null, null, null, null, null, null);
+      v_res := array_append(v_res, 'FAIL  11 rls: the field team cannot create assets through the function  — it worked');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  11 rls: the field team cannot create assets through the function (42501)'
+                                         else 'FAIL  11 rls: field-team asset creation  — wrong error ' || sqlstate end));
+    end;
+    begin
+      perform public.retire_water_asset(v_tank, v_d, 'STOPPED', null);
+      v_res := array_append(v_res, 'FAIL  11 rls: the field team cannot retire an asset  — it worked');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  11 rls: the field team cannot retire an asset (42501)'
+                                         else 'FAIL  11 rls: field-team retire  — wrong error ' || sqlstate end));
+    end;
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+  exception when others then
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+    v_res := array_append(v_res, 'FAIL  11 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ==================================== REPORT ======================================

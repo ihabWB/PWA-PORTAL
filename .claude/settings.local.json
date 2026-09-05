@@ -11,7 +11,10 @@
       "Bash(npm run *)",
       "Bash(git add *)",
       "Bash(git commit -q -m 'fix\\(i18n\\): check keys from the code, not by comparing the two locale files *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(node runall.mjs)",
+      "Bash(node scripts/bundle-sql.mjs)",
+      "Bash(git commit -q -m 'feat\\(db\\): Stage 5 schema — future types widened once, asset write path \\(0017/0018\\) *)"
     ]
   }
 }
