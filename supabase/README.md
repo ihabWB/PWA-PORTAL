@@ -50,21 +50,29 @@ select * from public.get_missing_readings(current_date - 1, current_date - 1, nu
 ## Functional test
 
 After all 18 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
-Editor and run it. It creates a throw-away FIELD_TEAM user, inserts readings, corrections, tank levels,
-impersonates users with `set role authenticated`, and then **rolls everything back on purpose** by
-ending with `RAISE EXCEPTION`. The editor therefore shows a red error box whose message begins with
-`TEST REPORT — N failed of M checks (K crashed sections)` followed by one `PASS`/`FAIL` line per
-check. Zero failures **and zero crashed sections** is the goal; send the full message back if any
-line says `FAIL`.
+Editor and run it. **It is safe to run against the production project at any time**: it builds its own
+area, assets, measurement points and balance zone (all prefixed `ZZT-`), asserts only against those,
+and then **rolls everything back on purpose** by ending with `RAISE EXCEPTION`. The editor therefore
+shows a red error box whose message begins with
+`TEST REPORT — N failed of M checks (K crashed sections)` followed by one `PASS`/`FAIL` line per check.
+Zero failures **and zero crashed sections** is the goal; send the full message back if any line says
+`FAIL`.
 
-A crashed section means its checks never ran — that is a gap in coverage, not a pass.
+Two rules keep the report honest:
+
+- **A crashed section means its checks never ran.** That is missing coverage, not a pass, and it is
+  counted separately.
+- **No assertion depends on operational data.** Where a function is global by nature (entry tasks,
+  missing readings, placeholder inventory) the assertion is scoped by the test prefix or the test
+  area, never by an absolute row count. Entering real readings, or renaming every seeded placeholder,
+  does not change the result.
 
 ## Local verification
 
 The migrations and the functional test run against a real PostgreSQL before being sent for
 review, using [PGlite](https://pglite.dev) (PostgreSQL 18 compiled to WASM) with stubs for the
 Supabase-specific pieces: the `auth` schema, the `anon`/`authenticated`/`service_role` roles, and
-PostGIS geometry columns (not exercised by the test). Current result: **120 checks, 0 failures, 0
+PostGIS geometry columns (not exercised by the test). Current result: **119 checks, 0 failures, 0
 crashed sections**, and RLS enabled on all 20 public tables. The harness lives outside the repo;
 it is a development aid, not a substitute for running the test on the real project.
 

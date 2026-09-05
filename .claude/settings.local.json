@@ -22,7 +22,10 @@
       "Bash(node probe.mjs)",
       "Read(//tmp/**)",
       "Bash(cp /tmp/an.html \"C:/Users/SS/AppData/Local/Temp/claude/c--Users-SS-PWAPORTAL/c1055075-a630-4b96-9559-51985a7753eb/scratchpad/an.html\")",
-      "Bash(git commit -q -m 'feat\\(stage5\\): asset management — catalogue, points, topology, retirement, placeholder tool *)"
+      "Bash(git commit -q -m 'feat\\(stage5\\): asset management — catalogue, points, topology, retirement, placeholder tool *)",
+      "Bash(node contaminate.mjs)",
+      "Bash(node contaminate.mjs --contaminate)",
+      "Bash(git commit -q -m 'test: make the functional test isolated from operational data *)"
     ]
   }
 }

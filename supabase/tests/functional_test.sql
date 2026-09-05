@@ -1,54 +1,63 @@
 -- =============================================================================
--- FUNCTIONAL TEST — run in the Supabase SQL Editor AFTER migrations 0001–0014
--- (order: 0001…0011, 0013, 0014, then 0012 last).
+-- FUNCTIONAL TEST — safe to run against the production project at any time.
+-- Run in the Supabase SQL Editor AFTER migrations 0001–0018
+-- (order: 0001…0011, 0013, 0014, 0015, 0016, 0017, 0018, then 0012 last).
 --
 -- The whole run is ROLLED BACK by design: the closing RAISE EXCEPTION carries the
 -- report, so the editor shows a red box whose message starts with "TEST REPORT".
 -- That is the expected outcome. No test data, no test user and no alerts survive.
 --
--- Two mechanisms make the report trustworthy:
+-- Three properties make the report trustworthy:
 --
---  1. Results accumulate with array_append() into a PL/pgSQL text[] variable.
+--  1. ISOLATION. The test builds its OWN area, assets, measurement points and balance
+--     zone, all prefixed ZZT-, and asserts only against those. It never reads a seeded
+--     row and never assumes an empty database, so entering real readings — or renaming
+--     every placeholder — cannot make it fail. Where a function is global by nature
+--     (entry tasks, missing readings, placeholder inventory) the assertion is scoped by
+--     the test prefix or the test area, never by an absolute row count.
+--
+--  2. RECORDING. Results accumulate with array_append() into a PL/pgSQL text[].
 --     `v_res := v_res || 'literal'` is NOT used: with an unknown-typed literal on the
---     right, PostgreSQL resolves `anyarray || anyarray` and fails with
---     "22P02 malformed array literal", which previously aborted whole sections.
---     A variable also has no ACL, so recording cannot fail under `set local role`.
---     The MECHANISM block below proves both properties before any test runs.
+--     right PostgreSQL resolves `anyarray || anyarray` and fails with 22P02, which once
+--     aborted whole sections. A variable also has no ACL, so recording cannot fail under
+--     `set local role`. The MECHANISM block proves both before anything else runs.
 --
---  2. All shared data is created in the FIXTURES stage, outside any exception handler.
---     BEGIN…EXCEPTION opens a subtransaction: when a guarded section raised, every row
---     it had inserted was rolled back while its recorded PASS lines survived, so later
---     sections silently measured missing data and reported false failures.
+--  3. FIXTURES OUTSIDE HANDLERS. BEGIN…EXCEPTION opens a subtransaction: a section that
+--     raised used to roll back its own inserts while its PASS lines survived, so later
+--     sections measured missing data and reported false failures.
 --
 -- Covers:  0 audit on tables without an `id` column   1 supersede + immutability + audit
 --          2 pass-through mismatch alert              3 zone balance with incomplete data
 --          4 negative RLS as FIELD_TEAM               5 inactive user scope
 --          6 storage curve / linear fallback          7 status propagation + SOURCE_STOPPED
 --          8 abnormal-reading flag                    9 management scope (positive control)
+--         10 non-daily points and entry tasks        11 asset management write path
 -- =============================================================================
 do $$
 declare
   v_admin  uuid;
   v_field  uuid := gen_random_uuid();
+  v_area   uuid;
   v_zone   uuid;
-  v_p1 uuid; v_p2 uuid; v_p3 uuid; v_p4 uuid; v_p5 uuid;
-  v_in uuid; v_out uuid; v_tank uuid; v_well1 uuid;
-  v_d      date := date '2019-06-01';     -- far in the past: never collides with live data
+  v_aw1 uuid; v_atank uuid; v_asp uuid; v_atmp uuid;
+  v_pw1 uuid; v_pw2 uuid; v_pw3 uuid; v_pw4 uuid; v_pw5 uuid;
+  v_pin uuid; v_pout uuid; v_psp uuid; v_ptmp uuid;
+  v_d      date := date '2019-06-01';   -- far past: cannot collide with operational data
   v_r1 uuid; v_r2 uuid; v_r3 uuid; v_r4 uuid;
-  v_new_asset uuid; v_new_point uuid; v_new_path uuid;
+  v_new_asset uuid; v_new_point uuid;
   v_old    public.readings%rowtype;
   v_bal    record;
   v_i      int;
   v_n      int;
   v_num    numeric;
-  v_res    text[] := '{}';               -- PASS/FAIL lines; no ACL, survives `set role`
+  v_txt    text;
+  v_res    text[] := '{}';             -- PASS/FAIL lines; no ACL, survives `set role`
   v_ok     boolean;
   v_total  int;
   v_fail   int;
   v_crash  int;
 begin
   -- ============================== MECHANISM SELF-CHECK ==============================
-  -- Verifies the three append shapes used below. If this fails, nothing else is reliable.
   begin
     v_res := array_append(v_res, 'PASS  mechanism: array_append with a bare literal');
     v_res := array_append(v_res, (case when true then 'PASS  mechanism: array_append with a CASE expression'
@@ -61,107 +70,169 @@ begin
     raise exception 'RECORDING MECHANISM BROKEN: % %', sqlstate, sqlerrm;
   end;
 
-  -- ===================================== SETUP ======================================
+  -- ============================== ENVIRONMENT CHECKS =================================
   select id into v_admin from auth.users where lower(email) = 'ehabomear@gmail.com';
-  select id into v_zone  from public.balance_zones where code = 'SAEER-TRANSIT';
-  select id into v_p1  from public.measurement_points where code = 'MP-W-TMP-01';
-  select id into v_p2  from public.measurement_points where code = 'MP-W-TMP-02';
-  select id into v_p3  from public.measurement_points where code = 'MP-W-TMP-03';
-  select id into v_p4  from public.measurement_points where code = 'MP-W-TMP-04';
-  select id into v_p5  from public.measurement_points where code = 'MP-W-TMP-05';
-  select id into v_in  from public.measurement_points where code = 'MP-TNK-SAEER-IN';
-  select id into v_out from public.measurement_points where code = 'MP-TNK-SAEER-OUT';
-  select id into v_tank  from public.water_assets where code = 'TNK-SAEER';
-  select id into v_well1 from public.water_assets where code = 'W-TMP-01';
+  v_ok := v_admin is not null;
+  v_res := array_append(v_res, (case when v_ok then 'PASS  env: admin auth user found'
+                                     else 'FAIL  env: admin auth user found  — ehabomear@gmail.com missing' end));
 
-  v_ok  := v_admin is not null;
-  v_res := array_append(v_res, (case when v_ok then 'PASS  setup: admin auth user found'
-                                     else 'FAIL  setup: admin auth user found  — ehabomear@gmail.com missing' end));
-  v_ok  := v_zone is not null and v_in is not null and v_out is not null and v_tank is not null;
-  v_res := array_append(v_res, (case when v_ok then 'PASS  setup: Saeer zone, inlet, outlet and tank found'
-                                     else 'FAIL  setup: Saeer zone/inlet/outlet/tank missing  — run 0011' end));
-  v_ok  := exists (select 1 from public.profiles where id = v_admin and role = 'SUPER_ADMIN' and is_active);
-  v_res := array_append(v_res, (case when v_ok then 'PASS  setup: admin profile is an active SUPER_ADMIN (0012 applied)'
-                                     else 'FAIL  setup: admin profile is an active SUPER_ADMIN  — re-run 0012 last' end));
-  v_ok  := exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-                    where n.nspname = 'app' and p.proname = 'self_role');
-  v_res := array_append(v_res, (case when v_ok then 'PASS  setup: 0014 applied (app.self_role exists)'
-                                     else 'FAIL  setup: 0014 NOT applied  — profile self-update will recurse (42P17)' end));
+  v_ok := exists (select 1 from public.profiles where id = v_admin and role = 'SUPER_ADMIN' and is_active);
+  v_res := array_append(v_res, (case when v_ok then 'PASS  env: admin profile is an active SUPER_ADMIN (0012 applied)'
+                                     else 'FAIL  env: admin profile is an active SUPER_ADMIN  — re-run 0012 last' end));
 
-  -- A throw-away FIELD_TEAM user (rolled back with everything else)
-  insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
-                          raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
-                          confirmation_token, recovery_token, email_change_token_new, email_change)
-  values (v_field, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
-          'field.test@example.invalid', extensions.crypt('Test-1234', extensions.gen_salt('bf')), now(),
-          '{"provider":"email","providers":["email"]}', '{"full_name":"Field Tester"}', now(), now(),
-          '', '', '', '');
+  select string_agg(want, ', ') into v_txt
+  from (values ('self_role'), ('user_role'), ('can_access_point')) w(want)
+  where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                     where n.nspname = 'app' and p.proname = w.want);
+  v_ok := v_txt is null;
+  v_res := array_append(v_res, (case when v_ok then 'PASS  env: the app helper functions exist (0008 and 0014 applied)'
+                                     else 'FAIL  env: missing app helpers  — ' || v_txt end));
 
-  v_ok := exists (select 1 from public.profiles where id = v_field and not is_active and role = 'FIELD_TEAM');
-  v_res := array_append(v_res, (case when v_ok then 'PASS  setup: profile auto-created by the auth trigger (inactive, FIELD_TEAM)'
-                                     else 'FAIL  setup: profile auto-created by the auth trigger (inactive, FIELD_TEAM)' end));
+  select string_agg(want, ', ') into v_txt
+  from (values ('calculate_zone_balance'), ('get_daily_entry_tasks'), ('get_asset_catalogue'),
+               ('get_placeholder_rows'), ('upsert_water_asset'), ('retire_water_asset')) w(want)
+  where not exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                     where n.nspname = 'public' and p.proname = w.want);
+  v_ok := v_txt is null;
+  v_res := array_append(v_res, (case when v_ok then 'PASS  env: the public functions exist (0016, 0017 and 0018 applied)'
+                                     else 'FAIL  env: missing public functions  — ' || v_txt end));
 
-  update public.profiles set is_active = true, role = 'FIELD_TEAM', full_name_ar = 'عامل حقلي تجريبي'
-   where id = v_field;
-  insert into public.assignments (user_id, measurement_point_id, active_from)
-  values (v_field, v_p1, date '2019-01-01');
+  select count(*) into v_n from pg_tables where schemaname = 'public' and not rowsecurity;
+  v_ok := v_n = 0;
+  v_res := array_append(v_res, (case when v_ok then 'PASS  env: row level security is enabled on every public table'
+                                     else 'FAIL  env: ' || v_n || ' public table(s) without RLS' end));
 
   -- ==================================== FIXTURES ====================================
-  -- Outside every exception handler: a later crash can no longer roll these away.
+  -- Everything the test asserts on is created by the test, outside every exception handler.
   begin
+    insert into public.areas (code, name_ar, name_en) values ('ZZT-AREA', 'منطقة اختبار', 'Test area')
+    returning id into v_area;
+
+    for v_i in 1..7 loop
+      insert into public.water_assets (code, name_ar, asset_type, supply_type, area_id, current_status)
+      values ('ZZT-W-' || v_i, 'بئر اختبار ' || v_i, 'WELL', 'GROUNDWATER', v_area, 'UNKNOWN');
+    end loop;
+    for v_i in 1..2 loop
+      insert into public.water_assets (code, name_ar, asset_type, supply_type, area_id, current_status)
+      values ('ZZT-IC-' || v_i, 'وصلة اختبار ' || v_i, 'ISRAELI_CONNECTION', 'ISRAELI', v_area, 'UNKNOWN');
+    end loop;
+
+    insert into public.water_assets (code, name_ar, asset_type, area_id, current_status, is_pass_through)
+    values ('ZZT-TANK', 'خزان عبور اختبار', 'TANK', v_area, 'UNKNOWN', true) returning id into v_atank;
+    insert into public.water_assets (code, name_ar, asset_type, area_id, current_status)
+    values ('ZZT-SP-1', 'مزوّد اختبار', 'SERVICE_PROVIDER', v_area, 'OPERATING') returning id into v_asp;
+    -- a placeholder-shaped code, so the inventory is tested without touching seeded rows
+    insert into public.water_assets (code, name_ar, asset_type, supply_type, area_id, current_status)
+    values ('ZZT-TMP-X', 'بئر مؤقت اختبار', 'WELL', 'GROUNDWATER', v_area, 'UNKNOWN') returning id into v_atmp;
+
+    select id into v_aw1 from public.water_assets where code = 'ZZT-W-1';
+
+    for v_i in 1..7 loop
+      insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+      select 'ZZT-MP-W-' || v_i, 'عداد بئر اختبار ' || v_i, 'SOURCE_METER', a.id, v_area, true
+      from public.water_assets a where a.code = 'ZZT-W-' || v_i;
+    end loop;
+    for v_i in 1..2 loop
+      insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+      select 'ZZT-MP-IC-' || v_i, 'عداد وصلة اختبار ' || v_i, 'SOURCE_METER', a.id, v_area, true
+      from public.water_assets a where a.code = 'ZZT-IC-' || v_i;
+    end loop;
+
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+    values ('ZZT-MP-IN',  'عداد مدخل اختبار', 'TANK_INLET_METER',  v_atank, v_area, true) returning id into v_pin;
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+    values ('ZZT-MP-OUT', 'عداد مخرج اختبار', 'TANK_OUTLET_METER', v_atank, v_area, true) returning id into v_pout;
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+    values ('ZZT-MP-SP-1', 'عداد مزوّد اختبار', 'SERVICE_PROVIDER_METER', v_asp, v_area, false) returning id into v_psp;
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+    values ('ZZT-MP-TMP-X', 'عداد مؤقت اختبار', 'SOURCE_METER', v_atmp, v_area, false) returning id into v_ptmp;
+
+    select id into v_pw1 from public.measurement_points where code = 'ZZT-MP-W-1';
+    select id into v_pw2 from public.measurement_points where code = 'ZZT-MP-W-2';
+    select id into v_pw3 from public.measurement_points where code = 'ZZT-MP-W-3';
+    select id into v_pw4 from public.measurement_points where code = 'ZZT-MP-W-4';
+    select id into v_pw5 from public.measurement_points where code = 'ZZT-MP-W-5';
+
+    -- the test's own transit zone: nine inflows, one arrival, no storage term
+    insert into public.balance_zones (code, name_ar) values ('ZZT-ZONE', 'منطقة موازنة اختبار')
+    returning id into v_zone;
+    insert into public.balance_zone_members (zone_id, measurement_point_id, role, measurement_quality, sign)
+    select v_zone, mp.id, 'INFLOW', 'MEASURED', 1
+    from public.measurement_points mp
+    where mp.code like 'ZZT-MP-W-%' or mp.code like 'ZZT-MP-IC-%';
+    insert into public.balance_zone_members (zone_id, measurement_point_id, role, measurement_quality, sign)
+    values (v_zone, v_pin, 'ARRIVAL', 'MEASURED', 1);
+
+    -- a throw-away FIELD_TEAM user assigned to exactly one test point
+    insert into auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at,
+                            raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+                            confirmation_token, recovery_token, email_change_token_new, email_change)
+    values (v_field, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated',
+            'field.test@example.invalid', extensions.crypt('Test-1234', extensions.gen_salt('bf')), now(),
+            '{"provider":"email","providers":["email"]}', '{"full_name":"Field Tester"}', now(), now(),
+            '', '', '', '');
+    update public.profiles set is_active = true, role = 'FIELD_TEAM', full_name_ar = 'عامل حقلي تجريبي'
+     where id = v_field;
+    insert into public.assignments (user_id, measurement_point_id, active_from)
+    values (v_field, v_pw1, date '2019-01-01');
+
     -- supersede fixture on the assigned point (day 0)
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
-    values (v_p1, v_d, v_d, 1200, 'METER_DISPLAY', 'OPERATING', v_admin) returning id into v_r1;
+    values (v_pw1, v_d, v_d, 1200, 'METER_DISPLAY', 'OPERATING', v_admin) returning id into v_r1;
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by, supersedes_id, notes)
-    values (v_p1, v_d, v_d, 1250, 'METER_DISPLAY', 'OPERATING', v_admin, v_r1, 'تصحيح') returning id into v_r2;
+    values (v_pw1, v_d, v_d, 1250, 'METER_DISPLAY', 'OPERATING', v_admin, v_r1, 'تصحيح') returning id into v_r2;
 
-    -- pass-through pairs: day 0 mismatch 10% (>3%), day 1 mismatch 1.5% (<3%),
-    -- then tighten this asset to 1% and repeat 1.5% on day 2
+    -- pass-through pairs: 10% (>3%), then 1.5% (<3%), then tighten to 1% and repeat 1.5%
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-    values (v_in,  v_d,     v_d,     1000, 'METER_DIFF', v_admin),
-           (v_out, v_d,     v_d,      900, 'METER_DIFF', v_admin),
-           (v_in,  v_d + 1, v_d + 1, 1000, 'METER_DIFF', v_admin),
-           (v_out, v_d + 1, v_d + 1,  985, 'METER_DIFF', v_admin);
-    update public.water_assets set pass_through_tolerance_pct = 1 where id = v_tank;
+    values (v_pin,  v_d,     v_d,     1000, 'METER_DIFF', v_admin),
+           (v_pout, v_d,     v_d,      900, 'METER_DIFF', v_admin),
+           (v_pin,  v_d + 1, v_d + 1, 1000, 'METER_DIFF', v_admin),
+           (v_pout, v_d + 1, v_d + 1,  985, 'METER_DIFF', v_admin);
+    update public.water_assets set pass_through_tolerance_pct = 1 where id = v_atank;
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-    values (v_in,  v_d + 2, v_d + 2, 1000, 'METER_DIFF', v_admin),
-           (v_out, v_d + 2, v_d + 2,  985, 'METER_DIFF', v_admin);
+    values (v_pin,  v_d + 2, v_d + 2, 1000, 'METER_DIFF', v_admin),
+           (v_pout, v_d + 2, v_d + 2,  985, 'METER_DIFF', v_admin);
 
-    -- four more sources on day 0; sources 6, 7 and both connections stay missing on purpose
+    -- four more sources on day 0; wells 6 and 7 and both connections stay missing on purpose
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-    values (v_p2, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
-           (v_p3, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
-           (v_p4, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
-           (v_p5, v_d, v_d, 800, 'METER_DISPLAY', v_admin);
+    values (v_pw2, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
+           (v_pw3, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
+           (v_pw4, v_d, v_d, 800, 'METER_DISPLAY', v_admin),
+           (v_pw5, v_d, v_d, 800, 'METER_DISPLAY', v_admin);
 
     -- a 2-day reading for the proration check
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-    values (v_p2, v_d + 1, v_d + 2, 600, 'METER_DIFF', v_admin);
+    values (v_pw2, v_d + 1, v_d + 2, 600, 'METER_DIFF', v_admin);
 
     -- status propagation: newer STOPPED first, then an OLDER OPERATING that must not win
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
-    values (v_p1, v_d + 6, v_d + 6, 0, 'ESTIMATE', 'STOPPED', v_admin);
+    values (v_pw1, v_d + 6, v_d + 6, 0, 'ESTIMATE', 'STOPPED', v_admin);
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, operational_status, entered_by)
-    values (v_p1, v_d + 3, v_d + 3, 1100, 'METER_DISPLAY', 'OPERATING', v_admin);
+    values (v_pw1, v_d + 3, v_d + 3, 1100, 'METER_DISPLAY', 'OPERATING', v_admin);
 
     -- abnormal-reading history: eight flat days, then a spike
     for v_i in 10..17 loop
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-      values (v_p2, v_d + v_i, v_d + v_i, 1000, 'METER_DISPLAY', v_admin);
+      values (v_pw2, v_d + v_i, v_d + v_i, 1000, 'METER_DISPLAY', v_admin);
     end loop;
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-    values (v_p2, v_d + 18, v_d + 18, 5000, 'METER_DISPLAY', v_admin) returning id into v_r3;
+    values (v_pw2, v_d + 18, v_d + 18, 5000, 'METER_DISPLAY', v_admin) returning id into v_r3;
+
+    -- one reading on the placeholder-shaped point, so renaming can be shown to keep it
+    insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
+    values (v_ptmp, v_d, v_d, 500, 'ESTIMATE', v_admin);
   exception when others then
     raise exception 'FIXTURE STAGE FAILED (nothing was tested): % %', sqlstate, sqlerrm;
   end;
 
   -- ------------------------- 0. audit on tables without an `id` column (0013) --
   begin
-    insert into public.user_areas (user_id, area_id) select v_field, id from public.areas where code = 'HEB';
+    insert into public.user_areas (user_id, area_id) values (v_field, v_area);
     v_res := array_append(v_res, 'PASS  0 audit: INSERT into user_areas (composite PK) succeeds');
 
     v_ok := exists (select 1 from public.audit_logs where entity_table = 'user_areas' and action = 'INSERT'
-                      and entity_id is null and (entity_key ->> 'user_id')::uuid = v_field and entity_key ? 'area_id');
+                      and entity_id is null and (entity_key ->> 'user_id')::uuid = v_field
+                      and (entity_key ->> 'area_id')::uuid = v_area);
     v_res := array_append(v_res, (case when v_ok then 'PASS  0 audit: user_areas logged with entity_key, entity_id null'
                                        else 'FAIL  0 audit: user_areas logged with entity_key, entity_id null' end));
 
@@ -193,7 +264,7 @@ begin
                                        else 'FAIL  1 supersede: original volume intact (1200)  — got ' || v_old.volume_m3 end));
 
     v_ok := (select count(*) from public.readings
-              where measurement_point_id = v_p1 and covers_from = v_d and not is_superseded) = 1;
+              where measurement_point_id = v_pw1 and covers_from = v_d and not is_superseded) = 1;
     v_res := array_append(v_res, (case when v_ok then 'PASS  1 supersede: the correction is the only active row for that day'
                                        else 'FAIL  1 supersede: the correction is the only active row for that day' end));
 
@@ -224,7 +295,7 @@ begin
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by, supersedes_id)
-      values (v_p1, v_d, v_d, 1, 'ESTIMATE', v_admin, v_r1);
+      values (v_pw1, v_d, v_d, 1, 'ESTIMATE', v_admin, v_r1);
       v_res := array_append(v_res, 'FAIL  1 supersede: double supersede refused  — was allowed');
     exception when others then
       v_res := array_append(v_res, 'PASS  1 supersede: double supersede refused (' || sqlstate || ')');
@@ -247,26 +318,26 @@ begin
   -- ------------------------------------------------------ 2. pass-through check
   begin
     v_ok := exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                      and asset_id = v_tank and reference_date = v_d and status = 'OPEN');
+                      and asset_id = v_atank and reference_date = v_d and status = 'OPEN');
     v_res := array_append(v_res, (case when v_ok then 'PASS  2 pass-through: 10% mismatch raised PASS_THROUGH_MISMATCH'
                                        else 'FAIL  2 pass-through: 10% mismatch raised PASS_THROUGH_MISMATCH' end));
 
     select (details ->> 'difference_pct')::numeric into v_num
-    from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH' and asset_id = v_tank and reference_date = v_d;
+    from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH' and asset_id = v_atank and reference_date = v_d;
     v_ok := v_num between 9.9 and 10.1
             and (select (details ->> 'threshold_pct')::numeric = 3 and (details ->> 'inlet_m3')::numeric = 1000
                    from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                    and asset_id = v_tank and reference_date = v_d);
+                    and asset_id = v_atank and reference_date = v_d);
     v_res := array_append(v_res, (case when v_ok then 'PASS  2 pass-through: the alert stores its inputs (difference 10%, threshold 3%)'
                                        else 'FAIL  2 pass-through: the alert stores its inputs  — difference_pct=' || coalesce(v_num::text, 'null') end));
 
     v_ok := not exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                          and asset_id = v_tank and reference_date = v_d + 1);
+                          and asset_id = v_atank and reference_date = v_d + 1);
     v_res := array_append(v_res, (case when v_ok then 'PASS  2 pass-through: 1.5% mismatch under a 3% threshold raises nothing'
                                        else 'FAIL  2 pass-through: 1.5% mismatch under a 3% threshold raises nothing' end));
 
     v_ok := exists (select 1 from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH'
-                      and asset_id = v_tank and reference_date = v_d + 2);
+                      and asset_id = v_atank and reference_date = v_d + 2);
     v_res := array_append(v_res, (case when v_ok then 'PASS  2 pass-through: the same 1.5% alerts after the per-asset threshold drops to 1%'
                                        else 'FAIL  2 pass-through: the same 1.5% alerts after the per-asset threshold drops to 1%' end));
   exception when others then
@@ -275,7 +346,7 @@ begin
 
   -- ------------------------------------------- 3. balance with incomplete data
   begin
-    -- day 0: p1 1250 (corrected) + p2..p5 800 each = 4450 in; 1000 arrived; 3450 unexplained
+    -- day 0 on the test zone: 1250 (corrected) + 4 x 800 = 4450 in; 1000 arrived; 3450 unexplained
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d);
 
     v_ok := v_bal.inflow_m3 = 4450;
@@ -292,7 +363,7 @@ begin
                                        else 'FAIL  3 balance: arrival = 1000  — got ' || v_bal.arrival_m3 end));
 
     v_ok := v_bal.outflow_measured_m3 = 0;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  3 balance: measured outflow = 0 (no route meters yet)'
+    v_res := array_append(v_res, (case when v_ok then 'PASS  3 balance: measured outflow = 0 (no route meters)'
                                        else 'FAIL  3 balance: measured outflow = 0  — got ' || v_bal.outflow_measured_m3 end));
 
     v_ok := v_bal.difference_m3 = 3450;
@@ -321,24 +392,32 @@ begin
                                        else 'FAIL  3 sources: total 9, operating 1  — got total='
                                             || v_bal.sources_total || ' operating=' || v_bal.sources_operating end));
 
+    v_ok := v_bal.sources_groundwater_total = 7 and v_bal.sources_groundwater_reported = 5
+            and v_bal.sources_israeli_total = 2 and v_bal.sources_israeli_reported = 0;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  3 sources: by supply type, groundwater 5/7 and israeli 0/2'
+                                       else 'FAIL  3 sources: by supply type  — gw '
+                                            || v_bal.sources_groundwater_reported || '/' || v_bal.sources_groundwater_total
+                                            || ' il ' || v_bal.sources_israeli_reported || '/' || v_bal.sources_israeli_total end));
+
     v_ok := (v_bal.by_role -> 'INFLOW' ->> 'points_complete')::int = 5
             and (v_bal.by_role -> 'INFLOW' ->> 'points_expected')::int = 9;
     v_res := array_append(v_res, (case when v_ok then 'PASS  3 by_role: INFLOW 5/9 complete'
                                        else 'FAIL  3 by_role: INFLOW 5/9 complete  — ' || v_bal.by_role::text end));
 
-    select count(*) into v_n from public.get_missing_readings(v_d, v_d, null);
+    -- scoped to the test area, so operational points elsewhere cannot change the count
+    select count(*) into v_n from public.get_missing_readings(v_d, v_d, v_area);
     v_ok := v_n = 4;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  3 missing readings: 4 of 11 daily points missing on day 0'
-                                       else 'FAIL  3 missing readings: 4 of 11 daily points missing on day 0  — got ' || v_n end));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  3 missing readings: 4 of the 11 daily test points missing on day 0'
+                                       else 'FAIL  3 missing readings: expected 4  — got ' || v_n end));
 
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d + 1, v_d + 1);
     v_ok := v_bal.inflow_m3 = 300;
     v_res := array_append(v_res, (case when v_ok then 'PASS  3 proration: a 2-day 600 m³ reading contributes 300 to one day'
-                                       else 'FAIL  3 proration: a 2-day 600 m³ reading contributes 300 to one day  — got ' || v_bal.inflow_m3 end));
+                                       else 'FAIL  3 proration: expected 300  — got ' || v_bal.inflow_m3 end));
 
     v_ok := v_bal.points_complete = 2;
     v_res := array_append(v_res, (case when v_ok then 'PASS  3 proration: the 2-day reading counts as coverage on both days'
-                                       else 'FAIL  3 proration: the 2-day reading counts as coverage  — got ' || v_bal.points_complete end));
+                                       else 'FAIL  3 proration: coverage  — got ' || v_bal.points_complete end));
 
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d + 2);
     v_ok := v_bal.point_days_expected = 30 and v_bal.arrival_m3 = 3000;
@@ -362,19 +441,20 @@ begin
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: app.user_role() = FIELD_TEAM'
                                        else 'FAIL  4 rls: app.user_role() = FIELD_TEAM  — got ' || coalesce(app.user_role(), 'null') end));
 
+    -- a fresh user with exactly one assignment: independent of how large the catalogue is
     select count(*) into v_n from public.measurement_points;
     v_ok := v_n = 1;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: sees only the 1 assigned point (of 11)'
-                                       else 'FAIL  4 rls: sees only the 1 assigned point (of 11)  — got ' || v_n end));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: sees exactly the 1 assigned point out of the whole catalogue'
+                                       else 'FAIL  4 rls: sees exactly the 1 assigned point  — got ' || v_n end));
 
-    select count(*) into v_n from public.readings where measurement_point_id = v_p2;
+    select count(*) into v_n from public.readings where measurement_point_id = v_pw2;
     v_ok := v_n = 0;
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: readings of an unassigned point are hidden (0)'
                                        else 'FAIL  4 rls: readings of an unassigned point are hidden (0)  — got ' || v_n end));
 
     -- SPEC §6: the entry form shows the previous few days on the assigned point.
-    select count(*) into v_n from public.readings where measurement_point_id = v_p1;
-    v_ok := v_n = 4;    -- superseded 1200, corrected 1250, day+3, day+6
+    select count(*) into v_n from public.readings where measurement_point_id = v_pw1;
+    v_ok := v_n = 4;    -- superseded 1200, corrected 1250, day+3, day+6 — all created by this test
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: all 4 readings of the assigned point are visible'
                                        else 'FAIL  4 rls: all 4 readings of the assigned point are visible  — got ' || v_n end));
 
@@ -382,13 +462,13 @@ begin
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: history includes the superseded row'
                                        else 'FAIL  4 rls: history includes the superseded row' end));
 
-    v_ok := (select count(distinct covers_from) from public.readings where measurement_point_id = v_p1) >= 3;
+    v_ok := (select count(distinct covers_from) from public.readings where measurement_point_id = v_pw1) >= 3;
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: previous days'' values are readable for the entry form'
                                        else 'FAIL  4 rls: previous days'' values are readable for the entry form' end));
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis)
-      values (v_p2, v_d + 5, v_d + 5, 10, 'ESTIMATE');
+      values (v_pw2, v_d + 5, v_d + 5, 10, 'ESTIMATE');
       v_res := array_append(v_res, 'FAIL  4 rls: INSERT on an unassigned point refused  — insert was allowed');
     exception when others then
       v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  4 rls: INSERT on an unassigned point refused (42501)'
@@ -397,7 +477,7 @@ begin
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-      values (v_p1, v_d + 5, v_d + 5, 10, 'ESTIMATE', v_admin);   -- forging entered_by
+      values (v_pw1, v_d + 5, v_d + 5, 10, 'ESTIMATE', v_admin);   -- forging entered_by
       v_res := array_append(v_res, 'FAIL  4 rls: INSERT with a forged entered_by refused  — insert was allowed');
     exception when others then
       v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  4 rls: INSERT with a forged entered_by refused (42501)'
@@ -405,7 +485,7 @@ begin
     end;
 
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis)
-    values (v_p1, v_d + 5, v_d + 5, 10, 'ESTIMATE') returning id into v_r4;
+    values (v_pw1, v_d + 5, v_d + 5, 10, 'ESTIMATE') returning id into v_r4;
     v_ok := (select entered_by = v_field from public.readings where id = v_r4);
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: INSERT on the assigned point allowed, entered_by = self'
                                        else 'FAIL  4 rls: INSERT on the assigned point allowed, entered_by = self' end));
@@ -427,20 +507,20 @@ begin
     end;
 
     insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, supersedes_id)
-    values (v_p1, v_d + 5, v_d + 5, 12, 'ESTIMATE', v_r4);
+    values (v_pw1, v_d + 5, v_d + 5, 12, 'ESTIMATE', v_r4);
     v_ok := (select is_superseded from public.readings where id = v_r4);
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: the field team corrects its own reading via supersede (no UPDATE right)'
                                        else 'FAIL  4 rls: the field team corrects its own reading via supersede' end));
 
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, supersedes_id)
-      values (v_p1, v_d + 5, v_d + 5, 13, 'ESTIMATE', v_r4);      -- already superseded above
+      values (v_pw1, v_d + 5, v_d + 5, 13, 'ESTIMATE', v_r4);      -- already superseded above
       v_res := array_append(v_res, 'FAIL  4 rls: supersede of an already-superseded row refused  — was allowed');
     exception when others then
       v_res := array_append(v_res, 'PASS  4 rls: supersede of an already-superseded row refused (' || sqlstate || ')');
     end;
 
-    select count(*) into v_n from public.alerts where alert_type = 'PASS_THROUGH_MISMATCH';
+    select count(*) into v_n from public.alerts where asset_id = v_atank;
     v_ok := v_n = 0;
     v_res := array_append(v_res, (case when v_ok then 'PASS  4 rls: tank alerts are hidden from the field team (0)'
                                        else 'FAIL  4 rls: tank alerts are hidden from the field team (0)  — got ' || v_n end));
@@ -486,7 +566,7 @@ begin
     end;
 
     begin
-      insert into public.water_assets (code, name_ar, asset_type, supply_type) values ('W-HACK', 'x', 'WELL', 'GROUNDWATER');
+      insert into public.water_assets (code, name_ar, asset_type, supply_type) values ('ZZT-HACK', 'x', 'WELL', 'GROUNDWATER');
       v_res := array_append(v_res, 'FAIL  4 rls: the field team cannot create assets  — was allowed');
     exception when others then
       v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  4 rls: the field team cannot create assets (42501)'
@@ -551,55 +631,63 @@ begin
 
   -- ---------------------------------------------- 6. storage: curve / fallback
   begin
-    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d, 2.5, v_admin);
+    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_atank, v_d, 2.5, v_admin);
     v_ok := (select storage_m3 is null and percentage_full is null
-               from public.tank_level_readings where asset_id = v_tank and reading_date = v_d);
+               from public.tank_level_readings where asset_id = v_atank and reading_date = v_d);
     v_res := array_append(v_res, (case when v_ok then 'PASS  6 storage: unknown geometry → storage NULL (never invented)'
                                        else 'FAIL  6 storage: unknown geometry → storage NULL' end));
 
-    update public.water_assets set capacity_m3 = 5000, height_m = 5 where id = v_tank;
-    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d + 1, 2.5, v_admin);
+    update public.water_assets set capacity_m3 = 5000, height_m = 5 where id = v_atank;
+    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_atank, v_d + 1, 2.5, v_admin);
     v_ok := (select storage_m3 = 2500 and percentage_full = 50
-               from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 1);
+               from public.tank_level_readings where asset_id = v_atank and reading_date = v_d + 1);
     v_res := array_append(v_res, (case when v_ok then 'PASS  6 storage: linear fallback 2.5 m of 5 m × 5000 = 2500 m³ (50%)'
                                        else 'FAIL  6 storage: linear fallback  — got '
                                             || coalesce((select storage_m3::text from public.tank_level_readings
-                                                          where asset_id = v_tank and reading_date = v_d + 1), 'null') end));
+                                                          where asset_id = v_atank and reading_date = v_d + 1), 'null') end));
 
-    insert into public.level_volume_curve (asset_id, level_m, volume_m3) values (v_tank, 0, 0), (v_tank, 2, 2000), (v_tank, 5, 6000);
-    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_tank, v_d + 2, 2.5, v_admin);
-    v_ok := (select storage_m3 = 2666.67 from public.tank_level_readings where asset_id = v_tank and reading_date = v_d + 2);
+    insert into public.level_volume_curve (asset_id, level_m, volume_m3) values (v_atank, 0, 0), (v_atank, 2, 2000), (v_atank, 5, 6000);
+    insert into public.tank_level_readings (asset_id, reading_date, level_m, entered_by) values (v_atank, v_d + 2, 2.5, v_admin);
+    v_ok := (select storage_m3 = 2666.67 from public.tank_level_readings where asset_id = v_atank and reading_date = v_d + 2);
     v_res := array_append(v_res, (case when v_ok then 'PASS  6 storage: curve interpolation at 2.5 m between (2,2000)-(5,6000) = 2666.67'
                                        else 'FAIL  6 storage: curve interpolation  — got '
                                             || coalesce((select storage_m3::text from public.tank_level_readings
-                                                          where asset_id = v_tank and reading_date = v_d + 2), 'null') end));
+                                                          where asset_id = v_atank and reading_date = v_d + 2), 'null') end));
 
-    v_ok := public.get_storage_m3(v_tank, 1) = 1000;
+    v_ok := public.get_storage_m3(v_atank, 1) = 1000;
     v_res := array_append(v_res, (case when v_ok then 'PASS  6 storage: the curve wins over the linear fallback (level 1 → 1000)'
                                        else 'FAIL  6 storage: the curve wins over the linear fallback  — got '
-                                            || coalesce(public.get_storage_m3(v_tank, 1)::text, 'null') end));
+                                            || coalesce(public.get_storage_m3(v_atank, 1)::text, 'null') end));
   exception when others then
     v_res := array_append(v_res, 'FAIL  6 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ------------------------------------------ 7. status propagation + alert
+  -- The fixtures inserted a STOPPED reading for day+6 and THEN an OPERATING reading for
+  -- day+3. The later-entered but older reading must not win.
   begin
-    v_ok := (select current_status = 'STOPPED' from public.water_assets where id = v_well1);
-    v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: the asset follows the latest reading (STOPPED)'
-                                       else 'FAIL  7 status: the asset follows the latest reading  — got '
-                                            || (select current_status from public.water_assets where id = v_well1) end));
+    v_txt := (select current_status from public.water_assets where id = v_aw1);
+    v_ok := v_txt = 'STOPPED';
+    v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: the asset follows the newest reading (STOPPED)'
+                                       else 'FAIL  7 status: the asset follows the newest reading  — got ' || coalesce(v_txt, 'null') end));
+
+    -- This check computes its own condition. It previously reused the alert result and so
+    -- never tested anything.
+    v_ok := v_txt = 'STOPPED'
+            and exists (select 1 from public.readings r
+                         where r.measurement_point_id = v_pw1 and r.covers_from = v_d + 3
+                           and r.operational_status = 'OPERATING' and not r.is_superseded);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: a later-entered OLDER reading did not overwrite the status'
+                                       else 'FAIL  7 status: a later-entered OLDER reading overwrote the status  — status='
+                                            || coalesce(v_txt, 'null') end));
 
     v_ok := exists (select 1 from public.alerts where alert_type = 'SOURCE_STOPPED'
-                      and asset_id = v_well1 and reference_date = v_d + 6);
+                      and asset_id = v_aw1 and reference_date = v_d + 6);
     v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: SOURCE_STOPPED alert raised'
                                        else 'FAIL  7 status: SOURCE_STOPPED alert raised' end));
 
-    -- the OPERATING reading for day+3 was entered after the STOPPED one for day+6
-    v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: a later-entered OLDER reading did not overwrite the status'
-                                       else 'FAIL  7 status: a later-entered OLDER reading did not overwrite the status' end));
-
     v_ok := (select operational_status = 'OPERATING' from public.readings
-              where measurement_point_id = v_p1 and covers_from = v_d and not is_superseded);
+              where measurement_point_id = v_pw1 and covers_from = v_d and not is_superseded);
     v_res := array_append(v_res, (case when v_ok then 'PASS  7 status: the per-day status stays on the reading (history preserved)'
                                        else 'FAIL  7 status: the per-day status stays on the reading' end));
   exception when others then
@@ -610,7 +698,7 @@ begin
   begin
     v_ok := (select validation_status = 'FLAGGED' from public.readings where id = v_r3);
     v_res := array_append(v_res, (case when v_ok then 'PASS  8 abnormal: 5000 after eight days of 1000 → FLAGGED, not rejected'
-                                       else 'FAIL  8 abnormal: 5000 after eight days of 1000 → FLAGGED  — got '
+                                       else 'FAIL  8 abnormal: expected FLAGGED  — got '
                                             || (select validation_status from public.readings where id = v_r3) end));
 
     v_ok := (select volume_m3 = 5000 from public.readings where id = v_r3);
@@ -622,7 +710,7 @@ begin
                                        else 'FAIL  8 abnormal: ABNORMAL_READING alert raised' end));
 
     v_ok := (select bool_and(validation_status = 'OK') from public.readings
-              where measurement_point_id = v_p2 and covers_from between v_d + 10 and v_d + 17);
+              where measurement_point_id = v_pw2 and covers_from between v_d + 10 and v_d + 17);
     v_res := array_append(v_res, (case when v_ok then 'PASS  8 abnormal: normal values are not flagged'
                                        else 'FAIL  8 abnormal: normal values are not flagged' end));
   exception when others then
@@ -634,16 +722,18 @@ begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
-    -- 11 daily points from 0011 + 3 service-provider meters from 0015
-    select count(*) into v_n from public.measurement_points;
-    v_ok := v_n = 14;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees all 14 measurement points'
-                                       else 'FAIL  9 admin: sees all 14 measurement points  — got ' || v_n end));
+    -- scoped to the test prefix: the size of the real catalogue is irrelevant
+    select count(*) into v_n from public.measurement_points where code like 'ZZT-%';
+    v_ok := v_n = 13;   -- 7 wells + 2 connections + inlet + outlet + provider + placeholder
+    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees all 13 test measurement points'
+                                       else 'FAIL  9 admin: sees all 13 test measurement points  — got ' || v_n end));
 
-    select count(*) into v_n from public.alerts where status = 'OPEN';
+    select count(*) into v_n from public.alerts
+     where status = 'OPEN'
+       and asset_id in (select id from public.water_assets where code like 'ZZT-%');
     v_ok := v_n >= 4;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees the open alerts (>=4)'
-                                       else 'FAIL  9 admin: sees the open alerts (>=4)  — got ' || v_n end));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees the 4 alerts raised on the test assets'
+                                       else 'FAIL  9 admin: sees the 4 alerts raised on the test assets  — got ' || v_n end));
 
     update public.readings set validation_status = 'REVIEWED', validation_notes = 'checked' where id = v_r3;
     get diagnostics v_n = row_count;
@@ -671,71 +761,61 @@ begin
     v_res := array_append(v_res, 'FAIL  9 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
-  -- ------------------- 10. Stage 3: service providers + entry tasks (0015/0016)
+  -- ------------------- 10. non-daily points and the derived entry task list
   begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
-    select count(*) into v_n from public.measurement_points
-     where point_type = 'SERVICE_PROVIDER_METER' and not expects_daily_reading;
-    v_ok := v_n = 3;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: 3 SERVICE_PROVIDER_METER points, none expecting a daily reading'
-                                       else 'FAIL  10 providers: 3 SERVICE_PROVIDER_METER points  — got ' || v_n end));
+    v_ok := (select not expects_daily_reading from public.measurement_points where id = v_psp);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: a service-provider meter expects no daily reading'
+                                       else 'FAIL  10 providers: a service-provider meter expects no daily reading' end));
 
-    select count(*) into v_n from public.balance_zone_members bzm
-      join public.measurement_points mp on mp.id = bzm.measurement_point_id
-     where mp.point_type = 'SERVICE_PROVIDER_METER';
+    select count(*) into v_n from public.balance_zone_members where measurement_point_id = v_psp;
     v_ok := v_n = 0;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: they are in no balance zone (difference stays unexplained)'
-                                       else 'FAIL  10 providers: they leaked into a balance zone  — ' || v_n || ' membership(s)' end));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: it is in no balance zone (the difference stays unexplained)'
+                                       else 'FAIL  10 providers: it leaked into a balance zone  — ' || v_n || ' membership(s)' end));
 
-    -- a monthly billing period must be storable on such a point without any schema change
     begin
       insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
-      select id, v_d, v_d + 29, 12000, 'ESTIMATE', v_admin
-        from public.measurement_points where code = 'MP-SP-TMP-01';
-      v_ok := (select days_covered = 30 from public.readings r
-                join public.measurement_points mp on mp.id = r.measurement_point_id
-               where mp.code = 'MP-SP-TMP-01' and r.covers_from = v_d);
+      values (v_psp, v_d, v_d + 29, 12000, 'ESTIMATE', v_admin);
+      v_ok := (select days_covered = 30 from public.readings
+                where measurement_point_id = v_psp and covers_from = v_d);
       v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: a 30-day billing period is storable (days_covered = 30)'
                                          else 'FAIL  10 providers: a 30-day billing period is storable' end));
     exception when others then
       v_res := array_append(v_res, 'FAIL  10 providers: a 30-day billing period is storable  — ' || sqlstate || ' ' || sqlerrm);
     end;
 
-    -- that monthly row must NOT move the daily balance
     select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d);
     v_ok := v_bal.inflow_m3 = 4450 and v_bal.outflow_measured_m3 = 0 and v_bal.difference_m3 = 3450;
     v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: the monthly row does not touch the daily balance'
                                        else 'FAIL  10 providers: the monthly row changed the daily balance  — inflow='
                                             || v_bal.inflow_m3 || ' outflow=' || v_bal.outflow_measured_m3 end));
 
-    v_ok := v_bal.sources_groundwater_total = 7 and v_bal.sources_groundwater_reported = 5
-            and v_bal.sources_israeli_total = 2 and v_bal.sources_israeli_reported = 0;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  10 balance: source counts by supply type (groundwater 5/7, israeli 0/2)'
-                                       else 'FAIL  10 balance: source counts by supply type  — gw '
-                                            || v_bal.sources_groundwater_reported || '/' || v_bal.sources_groundwater_total
-                                            || ' il ' || v_bal.sources_israeli_reported || '/' || v_bal.sources_israeli_total end));
-
-    select count(*) into v_n from public.get_daily_entry_tasks(v_d);
+    -- scoped to the test prefix, so operational points cannot change these counts
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d) where code like 'ZZT-%';
     v_ok := v_n = 11;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: 11 daily points listed (service-provider meters excluded)'
-                                       else 'FAIL  10 tasks: 11 daily points listed  — got ' || v_n end));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: 11 daily test points listed (non-daily points excluded)'
+                                       else 'FAIL  10 tasks: 11 daily test points listed  — got ' || v_n end));
 
-    select count(*) into v_n from public.get_daily_entry_tasks(v_d) where reading_id is not null;
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d)
+     where code like 'ZZT-%' and reading_id is not null;
     v_ok := v_n = 7;
     v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: 7 already entered, 4 pending for that day'
                                        else 'FAIL  10 tasks: 7 already entered  — got ' || v_n end));
 
     v_ok := (select volume_m3 = 1250 from public.get_daily_entry_tasks(v_d)
-              where measurement_point_id = v_p1);
+              where measurement_point_id = v_pw1);
     v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: an entered point carries the CORRECTED volume (1250)'
                                        else 'FAIL  10 tasks: an entered point carries the corrected volume' end));
+
+    v_ok := not exists (select 1 from public.get_daily_entry_tasks(v_d) where measurement_point_id = v_psp);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: the non-daily point never reaches the task list'
+                                       else 'FAIL  10 tasks: a non-daily point reached the task list' end));
 
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
 
-    -- the same list, scoped to the field worker
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
     select count(*) into v_n from public.get_daily_entry_tasks(v_d);
@@ -758,18 +838,16 @@ begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
-    -- widened type constraints accept the anticipated future values without a new migration
     begin
       v_new_asset := public.upsert_water_asset(
-        null, 'chk-valve', 'محبس اختبار', null, 'VALVE', null,
-        (select id from public.areas where code = 'HEB'), 'OPERATING',
+        null, 'zzt-valve', 'محبس اختبار', null, 'VALVE', null, v_area, 'OPERATING',
         null, null, null, null, null, null, null, null, null, null);
       v_res := array_append(v_res, 'PASS  11 types: a future asset type (VALVE) is accepted');
     exception when others then
-      v_res := array_append(v_res, 'FAIL  11 types: a future asset type (VALVE) is accepted  — ' || sqlstate || ' ' || sqlerrm);
+      v_res := array_append(v_res, 'FAIL  11 types: a future asset type (VALVE)  — ' || sqlstate || ' ' || sqlerrm);
     end;
 
-    v_ok := (select code = 'CHK-VALVE' from public.water_assets where id = v_new_asset);
+    v_ok := (select code = 'ZZT-VALVE' from public.water_assets where id = v_new_asset);
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: the code is normalised to upper case'
                                        else 'FAIL  11 assets: the code is normalised to upper case' end));
 
@@ -779,7 +857,7 @@ begin
 
     begin
       perform public.upsert_water_asset(
-        null, 'CHK-HALF', 'إحداثية ناقصة', null, 'VALVE', null, null, 'OPERATING',
+        null, 'ZZT-HALF', 'إحداثية ناقصة', null, 'VALVE', null, v_area, 'OPERATING',
         35.1, null, null, null, null, null, null, null, null, null);
       v_res := array_append(v_res, 'FAIL  11 assets: half a coordinate pair refused  — was accepted');
     exception when others then
@@ -789,7 +867,7 @@ begin
 
     begin
       perform public.upsert_water_asset(
-        null, 'CHK-BADLL', 'إحداثية خارج المدى', null, 'VALVE', null, null, 'OPERATING',
+        null, 'ZZT-BADLL', 'إحداثية خارج المدى', null, 'VALVE', null, v_area, 'OPERATING',
         999, 999, null, null, null, null, null, null, null, null);
       v_res := array_append(v_res, 'FAIL  11 assets: out-of-range coordinates refused  — were accepted');
     exception when others then
@@ -797,11 +875,9 @@ begin
                                          else 'FAIL  11 assets: out-of-range coordinates  — wrong error ' || sqlstate end));
     end;
 
-    -- update, including adding coordinates later
     perform public.upsert_water_asset(
-      v_new_asset, 'CHK-VALVE', 'محبس اختبار معدّل', 'Test valve', 'VALVE', null,
-      (select id from public.areas where code = 'HEB'), 'MAINTENANCE',
-      35.155, 31.595, null, null, null, null, date '2020-01-01', null, null, null);
+      v_new_asset, 'ZZT-VALVE', 'محبس اختبار معدّل', 'Test valve', 'VALVE', null, v_area, 'MAINTENANCE',
+      35.155, 31.595, null, null, null, null, date '2018-01-01', null, null, null);
     v_ok := (select name_ar = 'محبس اختبار معدّل' and current_status = 'MAINTENANCE' and geom is not null
                from public.water_assets where id = v_new_asset);
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: update applies, coordinates can be added later'
@@ -812,42 +888,31 @@ begin
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 assets: the catalogue reads longitude/latitude back correctly'
                                        else 'FAIL  11 assets: the catalogue reads longitude/latitude back' end));
 
-    -- a measurement point of a future type, on that asset
     begin
       v_new_point := public.upsert_measurement_point(
-        null, 'chk-consumer', 'عداد مشترك اختبار', null, 'CONSUMER_METER',
-        v_new_asset, null, (select id from public.areas where code = 'HEB'), false, true);
+        null, 'zzt-consumer', 'عداد مشترك اختبار', null, 'CONSUMER_METER',
+        v_new_asset, null, v_area, false, true);
       v_res := array_append(v_res, 'PASS  11 types: a future point type (CONSUMER_METER) is accepted');
     exception when others then
       v_res := array_append(v_res, 'FAIL  11 types: a future point type (CONSUMER_METER)  — ' || sqlstate || ' ' || sqlerrm);
     end;
 
-    v_ok := (select not expects_daily_reading from public.measurement_points where id = v_new_point);
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 points: expects_daily_reading is stored as given'
-                                       else 'FAIL  11 points: expects_daily_reading is stored as given' end));
-
-    select count(*) into v_n from public.get_daily_entry_tasks(v_d) where measurement_point_id = v_new_point;
-    v_ok := v_n = 0;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 points: a non-daily point never reaches the entry task list'
-                                       else 'FAIL  11 points: a non-daily point reached the entry task list' end));
-
     begin
       perform public.upsert_measurement_point(
-        null, 'CHK-ORPHAN', 'نقطة بلا أصل', null, 'SOURCE_METER', null, null, null, true, true);
+        null, 'ZZT-ORPHAN', 'نقطة بلا أصل', null, 'SOURCE_METER', null, null, null, true, true);
       v_res := array_append(v_res, 'FAIL  11 points: a point with neither asset nor path refused  — was accepted');
     exception when others then
       v_res := array_append(v_res, (case when sqlstate in ('22023','23514') then 'PASS  11 points: a point with neither asset nor path refused'
                                          else 'FAIL  11 points: orphan point  — wrong error ' || sqlstate end));
     end;
 
-    -- topology as data
-    v_new_path := public.upsert_water_path(
-      null, v_new_asset, v_tank, 'PIPELINE', 5, 'خط اختبار', null, v_d, null, null);
+    perform public.upsert_water_path(null, v_new_asset, v_atank, 'PIPELINE', 5, 'خط اختبار', null, v_d, null, null);
     v_ok := (select count(*) from public.get_asset_paths(v_new_asset) where direction = 'OUT') = 1;
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 paths: a new path appears on the asset as outgoing'
                                        else 'FAIL  11 paths: a new path appears on the asset as outgoing' end));
 
-    v_ok := (select count(*) from public.get_asset_paths(v_tank) where direction = 'IN' and other_asset_id = v_new_asset) = 1;
+    v_ok := (select count(*) from public.get_asset_paths(v_atank)
+              where direction = 'IN' and other_asset_id = v_new_asset) = 1;
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 paths: the same path appears on the far asset as incoming'
                                        else 'FAIL  11 paths: the same path appears on the far asset as incoming' end));
 
@@ -859,7 +924,6 @@ begin
                                          else 'FAIL  11 paths: self-loop  — wrong error ' || sqlstate end));
     end;
 
-    -- retire, never delete
     perform public.retire_water_asset(v_new_asset, date '2021-03-01', 'STOPPED', 'خرج من الخدمة للاختبار');
     v_ok := (select operational_end_date = date '2021-03-01' and current_status = 'STOPPED'
                from public.water_assets where id = v_new_asset);
@@ -870,8 +934,7 @@ begin
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: the catalogue marks it retired'
                                        else 'FAIL  11 retire: the catalogue marks it retired' end));
 
-    select count(*) into v_n from public.get_asset_catalogue(false) where id = v_new_asset;
-    v_ok := v_n = 0;
+    v_ok := not exists (select 1 from public.get_asset_catalogue(false) where id = v_new_asset);
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: it drops out of the active-only catalogue'
                                        else 'FAIL  11 retire: it drops out of the active-only catalogue' end));
 
@@ -887,31 +950,30 @@ begin
     v_res := array_append(v_res, (case when v_ok then 'PASS  11 retire: reinstating clears the end date'
                                        else 'FAIL  11 retire: reinstating clears the end date' end));
 
-    -- placeholder inventory
-    select count(*) into v_n from public.get_placeholder_rows();
-    v_ok := v_n = 24;   -- 12 seeded assets + their 12 measurement points
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: all 24 seeded TMP rows are listed'
-                                       else 'FAIL  11 placeholders: all 24 seeded TMP rows are listed  — got ' || v_n end));
+    -- placeholder inventory, asserted on the test's own rows only
+    v_ok := exists (select 1 from public.get_placeholder_rows() where id = v_atmp)
+            and exists (select 1 from public.get_placeholder_rows() where id = v_ptmp);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: a TMP-coded asset and its point are listed'
+                                       else 'FAIL  11 placeholders: a TMP-coded asset and its point are listed' end));
 
-    v_ok := not exists (select 1 from public.get_placeholder_rows() where id = v_new_asset);
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: a real asset is not listed as a placeholder'
-                                       else 'FAIL  11 placeholders: a real asset was listed as a placeholder' end));
+    v_ok := not exists (select 1 from public.get_placeholder_rows() where id in (v_aw1, v_new_asset));
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: assets with a real code are not listed'
+                                       else 'FAIL  11 placeholders: an asset with a real code was listed' end));
 
-    v_ok := (select bool_and(is_placeholder) from public.get_asset_catalogue(true)
-              where code like '%TMP%');
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: the catalogue flags every seeded row'
-                                       else 'FAIL  11 placeholders: the catalogue flags every seeded row' end));
+    v_ok := (select is_placeholder from public.get_asset_catalogue(true) where id = v_atmp)
+            and not (select is_placeholder from public.get_asset_catalogue(true) where id = v_aw1);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: the catalogue flag matches the inventory'
+                                       else 'FAIL  11 placeholders: the catalogue flag matches the inventory' end));
 
-    -- renaming a placeholder to a real code clears the flag without touching its readings
+    -- renaming a placeholder keeps its readings and clears the flag
+    select reading_count into v_n from public.get_asset_catalogue(true) where id = v_atmp;
     perform public.upsert_water_asset(
-      (select id from public.water_assets where code = 'W-TMP-01'),
-      'W-BANI-NAIM-2', 'بئر بني نعيم 2', 'Bani Naim well 2', 'WELL', 'GROUNDWATER',
-      (select id from public.areas where code = 'HEB'), 'OPERATING',
+      v_atmp, 'ZZT-REAL-1', 'بئر حقيقي', 'Real well', 'WELL', 'GROUNDWATER', v_area, 'OPERATING',
       35.16, 31.52, null, null, null, null, null, null, null, null);
-    v_ok := (select not is_placeholder and reading_count > 0
-               from public.get_asset_catalogue(true) where code = 'W-BANI-NAIM-2');
-    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: renaming a seed asset keeps its readings and clears the flag'
-                                       else 'FAIL  11 placeholders: renaming a seed asset keeps its readings and clears the flag' end));
+    v_ok := (select not is_placeholder and reading_count = v_n
+               from public.get_asset_catalogue(true) where id = v_atmp);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  11 placeholders: renaming keeps every reading and clears the flag'
+                                       else 'FAIL  11 placeholders: renaming lost readings or kept the flag' end));
 
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
@@ -921,7 +983,7 @@ begin
     perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
     begin
       perform public.upsert_water_asset(
-        null, 'CHK-HACK', 'اختراق', null, 'WELL', 'GROUNDWATER', null, 'OPERATING',
+        null, 'ZZT-HACK2', 'اختراق', null, 'WELL', 'GROUNDWATER', null, 'OPERATING',
         null, null, null, null, null, null, null, null, null, null);
       v_res := array_append(v_res, 'FAIL  11 rls: the field team cannot create assets through the function  — it worked');
     exception when others then
@@ -929,7 +991,7 @@ begin
                                          else 'FAIL  11 rls: field-team asset creation  — wrong error ' || sqlstate end));
     end;
     begin
-      perform public.retire_water_asset(v_tank, v_d, 'STOPPED', null);
+      perform public.retire_water_asset(v_atank, v_d, 'STOPPED', null);
       v_res := array_append(v_res, 'FAIL  11 rls: the field team cannot retire an asset  — it worked');
     exception when others then
       v_res := array_append(v_res, (case when sqlstate = '42501' then 'PASS  11 rls: the field team cannot retire an asset (42501)'
