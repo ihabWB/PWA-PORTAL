@@ -1,0 +1,56 @@
+{
+  "app": {
+    "name": "Water Sources Management Platform",
+    "shortName": "Water Sources",
+    "tagline": "Monitoring sources, pumping, storage and water balance"
+  },
+  "common": {
+    "loading": "Loading…",
+    "save": "Save",
+    "cancel": "Cancel",
+    "back": "Back",
+    "signOut": "Sign out",
+    "language": "Language",
+    "arabic": "العربية",
+    "english": "English",
+    "unitM3": "m³",
+    "notAvailable": "N/A"
+  },
+  "nav": {
+    "home": "Home",
+    "saeer": "Arrivals at Saeer",
+    "fieldEntry": "Daily entry",
+    "readings": "Readings",
+    "assets": "Assets",
+    "map": "Map",
+    "alerts": "Alerts",
+    "comingSoon": "Coming soon"
+  },
+  "auth": {
+    "signInTitle": "Sign in",
+    "signInSubtitle": "Use the email and password issued to you by Water Management.",
+    "email": "Email",
+    "password": "Password",
+    "signIn": "Sign in",
+    "signingIn": "Signing in…",
+    "errors": {
+      "emailInvalid": "Enter a valid email address",
+      "passwordRequired": "Password is required",
+      "passwordTooShort": "Password is too short",
+      "invalidCredentials": "Incorrect email or password",
+      "generic": "Could not sign in. Please try again.",
+      "notConfigured": "The system is not connected to its database yet. Contact the administrator."
+    }
+  },
+  "home": {
+    "welcome": "Welcome, {name}",
+    "todayIs": "Today is {date}",
+    "stageNotice": "Stage 1 — Foundation complete. Operational screens are built in the following stages per SPEC.md.",
+    "sampleFigure": "Number rendering sample: {volume} {unit}",
+    "sampleCompleteness": "Data completeness {reported} / {expected} measurement points"
+  },
+  "setup": {
+    "title": "Setup incomplete",
+    "body": "Supabase keys are not configured. Copy .env.example to .env.local, fill in the values and restart."
+  }
+}

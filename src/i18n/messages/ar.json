@@ -1,0 +1,56 @@
+{
+  "app": {
+    "name": "منصة إدارة مصادر المياه",
+    "shortName": "مصادر المياه",
+    "tagline": "مراقبة المصادر والضخ والتخزين والموازنة المائية"
+  },
+  "common": {
+    "loading": "جارٍ التحميل…",
+    "save": "حفظ",
+    "cancel": "إلغاء",
+    "back": "رجوع",
+    "signOut": "تسجيل الخروج",
+    "language": "اللغة",
+    "arabic": "العربية",
+    "english": "English",
+    "unitM3": "م³",
+    "notAvailable": "غير متوفر"
+  },
+  "nav": {
+    "home": "الرئيسية",
+    "saeer": "الواصل إلى سعير",
+    "fieldEntry": "الإدخال اليومي",
+    "readings": "القراءات",
+    "assets": "الأصول",
+    "map": "الخريطة",
+    "alerts": "التنبيهات",
+    "comingSoon": "قريبًا"
+  },
+  "auth": {
+    "signInTitle": "تسجيل الدخول",
+    "signInSubtitle": "ادخل ببريدك الإلكتروني وكلمة المرور الممنوحين لك من إدارة المياه.",
+    "email": "البريد الإلكتروني",
+    "password": "كلمة المرور",
+    "signIn": "دخول",
+    "signingIn": "جارٍ الدخول…",
+    "errors": {
+      "emailInvalid": "أدخل بريدًا إلكترونيًا صحيحًا",
+      "passwordRequired": "كلمة المرور مطلوبة",
+      "passwordTooShort": "كلمة المرور قصيرة جدًا",
+      "invalidCredentials": "البريد الإلكتروني أو كلمة المرور غير صحيحة",
+      "generic": "تعذّر تسجيل الدخول. حاول مرة أخرى.",
+      "notConfigured": "لم يتم ربط النظام بقاعدة البيانات بعد. راجع مسؤول النظام."
+    }
+  },
+  "home": {
+    "welcome": "مرحبًا، {name}",
+    "todayIs": "تاريخ اليوم: {date}",
+    "stageNotice": "المرحلة 1 — الأساس مكتمل. الشاشات التشغيلية تُبنى في المراحل التالية وفق SPEC.md.",
+    "sampleFigure": "مثال على عرض الأرقام: {volume} {unit}",
+    "sampleCompleteness": "اكتمال البيانات {reported} / {expected} نقطة قياس"
+  },
+  "setup": {
+    "title": "الإعداد غير مكتمل",
+    "body": "لم تُضبط مفاتيح Supabase. انسخ .env.example إلى .env.local وأدخل القيم ثم أعد التشغيل."
+  }
+}
