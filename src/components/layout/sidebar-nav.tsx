@@ -13,7 +13,7 @@ const NAV_ITEMS: ReadonlyArray<{ key: string; href: string; ready: boolean }> = 
   { key: "saeer", href: "/saeer", ready: true },
   { key: "fieldEntry", href: "/field-entry", ready: true },
   { key: "readings", href: "/readings", ready: false },
-  { key: "assets", href: "/assets", ready: false },
+  { key: "assets", href: "/assets", ready: true },
   { key: "map", href: "/map", ready: false },
   { key: "alerts", href: "/alerts", ready: false },
 ];

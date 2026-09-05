@@ -14,7 +14,15 @@
       "Bash(git push *)",
       "Bash(node runall.mjs)",
       "Bash(node scripts/bundle-sql.mjs)",
-      "Bash(git commit -q -m 'feat\\(db\\): Stage 5 schema — future types widened once, asset write path \\(0017/0018\\) *)"
+      "Bash(git commit -q -m 'feat\\(db\\): Stage 5 schema — future types widened once, asset write path \\(0017/0018\\) *)",
+      "Bash(node \"C:/Users/SS/AppData/Local/Temp/claude/c--Users-SS-PWAPORTAL/c1055075-a630-4b96-9559-51985a7753eb/scratchpad/i18n-stage5.mjs\")",
+      "Bash(sed -i 's/  { key: \"assets\", href: \"\\\\/assets\", ready: false },/  { key: \"assets\", href: \"\\\\/assets\", ready: true },/' src/components/layout/sidebar-nav.tsx)",
+      "Bash(node probe.gen.mjs)",
+      "Bash(rm -f probe.gen.mjs)",
+      "Bash(node probe.mjs)",
+      "Read(//tmp/**)",
+      "Bash(cp /tmp/an.html \"C:/Users/SS/AppData/Local/Temp/claude/c--Users-SS-PWAPORTAL/c1055075-a630-4b96-9559-51985a7753eb/scratchpad/an.html\")",
+      "Bash(git commit -q -m 'feat\\(stage5\\): asset management — catalogue, points, topology, retirement, placeholder tool *)"
     ]
   }
 }

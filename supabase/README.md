@@ -9,7 +9,7 @@ next. Every file is re-runnable: running one twice is harmless.
 
 **One exception to the order:** the seed `0012` runs LAST. The audit trigger shipped in `0009` broke
 every insert into a table without an `id` column, which made `0012` fail and roll back; `0013` fixes
-it. Run order on a fresh database: **0001…0011, 0013, 0014, then 0012.**
+it. Run order on a fresh database: **0001…0011, 0013, 0014, 0015, 0016, 0017, 0018, then 0012.**
 
 | #    | File                                          | What it does                                                                                                                                               |
 | ---- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -27,6 +27,10 @@ it. Run order on a fresh database: **0001…0011, 0013, 0014, then 0012.**
 | 0012 | `0012_seed_super_admin.sql`                   | Promotes the test user to `SUPER_ADMIN` (**run after 0013**, it is re-runnable)                                                                            |
 | 0013 | `0013_fix_audit_generic_key.sql`              | Audit trigger no longer assumes an `id` column; adds `audit_logs.entity_key` (full PK as JSON)                                                             |
 | 0014 | `0014_fix_profiles_self_update_recursion.sql` | Removes the self-referencing subquery from the profiles self-update policy (42P17 recursion)                                                               |
+| 0015 | `0015_service_providers.sql`                  | Route take-offs: widens the type constraints, seeds placeholder providers outside every balance zone                                                       |
+| 0016 | `0016_stage3_functions.sql`                   | Balance gains per-supply-type source counts; `get_daily_entry_tasks` for the morning list                                                                  |
+| 0017 | `0017_widen_type_constraints.sql`             | All anticipated asset/point types in one pass; `get_placeholder_rows`, `get_asset_catalogue`                                                               |
+| 0018 | `0018_asset_management_functions.sql`         | Asset/point/path write path: upserts, retire, reinstate, `get_asset_points`, `get_asset_paths`                                                             |
 
 Or paste the single bundle produced by `npm run db:bundle` (`supabase/bundle.sql`, git-ignored).
 
@@ -45,7 +49,7 @@ select * from public.get_missing_readings(current_date - 1, current_date - 1, nu
 
 ## Functional test
 
-After all 14 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
+After all 18 files succeed, paste [`tests/functional_test.sql`](tests/functional_test.sql) into the SQL
 Editor and run it. It creates a throw-away FIELD_TEAM user, inserts readings, corrections, tank levels,
 impersonates users with `set role authenticated`, and then **rolls everything back on purpose** by
 ending with `RAISE EXCEPTION`. The editor therefore shows a red error box whose message begins with
@@ -60,7 +64,7 @@ A crashed section means its checks never ran — that is a gap in coverage, not 
 The migrations and the functional test run against a real PostgreSQL before being sent for
 review, using [PGlite](https://pglite.dev) (PostgreSQL 18 compiled to WASM) with stubs for the
 Supabase-specific pieces: the `auth` schema, the `anon`/`authenticated`/`service_role` roles, and
-PostGIS geometry columns (not exercised by the test). Current result: **85 checks, 0 failures, 0
+PostGIS geometry columns (not exercised by the test). Current result: **120 checks, 0 failures, 0
 crashed sections**, and RLS enabled on all 20 public tables. The harness lives outside the repo;
 it is a development aid, not a substitute for running the test on the real project.
 

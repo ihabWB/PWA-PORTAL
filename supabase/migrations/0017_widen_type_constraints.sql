@@ -49,15 +49,16 @@ alter table public.water_paths
 -- ---------------------------------------------------------------------------
 create or replace function public.get_placeholder_rows()
 returns table (
-  entity        text,
-  id            uuid,
-  code          text,
-  name_ar       text,
-  name_en       text,
-  kind          text,
-  has_geometry  boolean,
-  reading_count bigint,
-  detail        text
+  entity          text,
+  id              uuid,
+  code            text,
+  name_ar         text,
+  name_en         text,
+  kind            text,
+  has_geometry    boolean,
+  reading_count   bigint,
+  parent_asset_id uuid,
+  detail          text
 )
 language sql
 stable
@@ -67,6 +68,7 @@ as $$
          (select count(*) from public.readings r
            join public.measurement_points mp on mp.id = r.measurement_point_id
           where mp.asset_id = a.id and not r.is_superseded),
+         a.id,
          a.description_ar
   from public.water_assets a
   where a.code like '%TMP%'
@@ -75,6 +77,7 @@ as $$
          null::boolean,
          (select count(*) from public.readings r
            where r.measurement_point_id = mp.id and not r.is_superseded),
+         mp.asset_id,
          (select a.code from public.water_assets a where a.id = mp.asset_id)
   from public.measurement_points mp
   where mp.code like '%TMP%'

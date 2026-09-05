@@ -14,23 +14,53 @@ export type EntryBasis = "METER_DISPLAY" | "METER_DIFF" | "PUMP_HOURS" | "ESTIMA
 
 export type ValidationStatus = "OK" | "FLAGGED" | "UNDER_REVIEW" | "REVIEWED";
 
-export type AssetType =
-  | "WELL"
-  | "ISRAELI_CONNECTION"
-  | "TANK"
-  | "RESERVOIR"
-  | "PUMPING_STATION"
-  | "MAIN_METER"
-  | "SERVICE_PROVIDER";
+/** Kept in step with the CHECK constraint in migration 0017. */
+export const ASSET_TYPES = [
+  "WELL",
+  "ISRAELI_CONNECTION",
+  "TANK",
+  "RESERVOIR",
+  "PUMPING_STATION",
+  "MAIN_METER",
+  "SERVICE_PROVIDER",
+  "DMA",
+  "VALVE",
+  "PRESSURE_POINT",
+  "BOOSTER_STATION",
+  "TREATMENT_PLANT",
+  "SPRING",
+  "TANKER_FILLING_POINT",
+] as const;
+export type AssetType = (typeof ASSET_TYPES)[number];
+
+/** Asset types that ARE a water source and therefore must carry a supply_type. */
+export const SOURCE_ASSET_TYPES: readonly AssetType[] = ["WELL", "SPRING", "ISRAELI_CONNECTION"];
 
 export type SupplyType = "GROUNDWATER" | "ISRAELI";
 
-export type PointType =
-  | "SOURCE_METER"
-  | "TRANSFER_METER"
-  | "TANK_INLET_METER"
-  | "TANK_OUTLET_METER"
-  | "SERVICE_PROVIDER_METER";
+/** Kept in step with the CHECK constraint in migration 0017. */
+export const POINT_TYPES = [
+  "SOURCE_METER",
+  "TRANSFER_METER",
+  "TANK_INLET_METER",
+  "TANK_OUTLET_METER",
+  "SERVICE_PROVIDER_METER",
+  "CONSUMER_METER",
+  "DMA_INLET_METER",
+  "DMA_OUTLET_METER",
+  "PRESSURE_SENSOR",
+  "FLOW_SENSOR",
+] as const;
+export type PointType = (typeof POINT_TYPES)[number];
+
+export const OPERATIONAL_STATUSES = [
+  "OPERATING",
+  "PARTIALLY_OPERATING",
+  "STOPPED",
+  "MAINTENANCE",
+  "DAMAGED",
+  "UNKNOWN",
+] as const;
 
 export type ProfileRow = {
   id: string;
@@ -154,6 +184,75 @@ export type ZoneBalanceRow = {
   by_role: Record<string, { points_expected: number; points_complete: number; volume_m3: number }>;
 };
 
+/** Row shape of public.get_asset_catalogue(p_include_retired). */
+export type AssetCatalogueRow = {
+  id: string;
+  code: string;
+  name_ar: string;
+  name_en: string | null;
+  asset_type: AssetType;
+  supply_type: SupplyType | null;
+  area_id: string | null;
+  area_name_ar: string | null;
+  current_status: OperationalStatus;
+  longitude: number | null;
+  latitude: number | null;
+  capacity_m3: number | null;
+  height_m: number | null;
+  is_pass_through: boolean;
+  operational_start_date: string | null;
+  operational_end_date: string | null;
+  is_retired: boolean;
+  is_placeholder: boolean;
+  point_count: number;
+  reading_count: number;
+};
+
+/** Row shape of public.get_placeholder_rows(). */
+export type PlaceholderRow = {
+  entity: "ASSET" | "MEASUREMENT_POINT";
+  id: string;
+  code: string;
+  name_ar: string;
+  name_en: string | null;
+  kind: string;
+  has_geometry: boolean | null;
+  reading_count: number;
+  parent_asset_id: string | null;
+  detail: string | null;
+};
+
+/** Row shape of public.get_asset_points(p_asset_id). */
+export type AssetPointRow = {
+  id: string;
+  code: string;
+  name_ar: string;
+  name_en: string | null;
+  point_type: PointType;
+  expects_daily_reading: boolean;
+  is_active: boolean;
+  is_placeholder: boolean;
+  reading_count: number;
+  last_reading_date: string | null;
+};
+
+/** Row shape of public.get_asset_paths(p_asset_id). */
+export type AssetPathRow = {
+  id: string;
+  direction: "IN" | "OUT";
+  other_asset_id: string;
+  other_code: string;
+  other_name_ar: string;
+  connection_type: string;
+  sequence_order: number | null;
+  name_ar: string | null;
+  active_from: string;
+  active_to: string | null;
+  is_active: boolean;
+};
+
+export type AreaRow = { id: string; code: string; name_ar: string; name_en: string | null };
+
 export type Database = {
   public: {
     Tables: {
@@ -173,6 +272,12 @@ export type Database = {
         Row: ReadingRow;
         Insert: ReadingInsert;
         Update: Partial<Pick<ReadingRow, "validation_status" | "validation_notes">>;
+        Relationships: [];
+      };
+      areas: {
+        Row: AreaRow;
+        Insert: never;
+        Update: never;
         Relationships: [];
       };
       balance_zones: {
@@ -197,6 +302,83 @@ export type Database = {
       get_daily_entry_tasks: {
         Args: { p_date: string };
         Returns: DailyEntryTaskRow[];
+      };
+      get_asset_catalogue: {
+        Args: { p_include_retired: boolean };
+        Returns: AssetCatalogueRow[];
+      };
+      get_placeholder_rows: {
+        Args: Record<string, never>;
+        Returns: PlaceholderRow[];
+      };
+      get_asset_points: {
+        Args: { p_asset_id: string };
+        Returns: AssetPointRow[];
+      };
+      get_asset_paths: {
+        Args: { p_asset_id: string };
+        Returns: AssetPathRow[];
+      };
+      upsert_water_asset: {
+        Args: {
+          p_id: string | null;
+          p_code: string;
+          p_name_ar: string;
+          p_name_en: string | null;
+          p_asset_type: string;
+          p_supply_type: string | null;
+          p_area_id: string | null;
+          p_current_status: string;
+          p_longitude: number | null;
+          p_latitude: number | null;
+          p_capacity_m3: number | null;
+          p_height_m: number | null;
+          p_is_pass_through: boolean;
+          p_pass_through_tolerance_pct: number | null;
+          p_operational_start_date: string | null;
+          p_external_reference: string | null;
+          p_description_ar: string | null;
+          p_description_en: string | null;
+        };
+        Returns: string;
+      };
+      retire_water_asset: {
+        Args: { p_id: string; p_end_date: string; p_status: string; p_note: string | null };
+        Returns: string;
+      };
+      reinstate_water_asset: {
+        Args: { p_id: string; p_status: string };
+        Returns: string;
+      };
+      upsert_measurement_point: {
+        Args: {
+          p_id: string | null;
+          p_code: string;
+          p_name_ar: string;
+          p_name_en: string | null;
+          p_point_type: string;
+          p_asset_id: string | null;
+          p_water_path_id: string | null;
+          p_area_id: string | null;
+          p_expects_daily_reading: boolean;
+          p_is_active: boolean;
+        };
+        Returns: string;
+      };
+      upsert_water_path: {
+        Args: {
+          p_id: string | null;
+          p_from_asset_id: string;
+          p_to_asset_id: string;
+          p_connection_type: string;
+          p_sequence_order: number | null;
+          p_name_ar: string | null;
+          p_name_en: string | null;
+          p_active_from: string | null;
+          p_active_to: string | null;
+          p_notes: string | null;
+        };
+        Returns: string;
       };
     };
     Enums: Record<string, never>;
