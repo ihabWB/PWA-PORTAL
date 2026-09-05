@@ -633,10 +633,11 @@ begin
     execute 'set local role authenticated';
     perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
 
+    -- 11 daily points from 0011 + 3 service-provider meters from 0015
     select count(*) into v_n from public.measurement_points;
-    v_ok := v_n = 11;
-    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees all 11 measurement points'
-                                       else 'FAIL  9 admin: sees all 11 measurement points  — got ' || v_n end));
+    v_ok := v_n = 14;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  9 admin: sees all 14 measurement points'
+                                       else 'FAIL  9 admin: sees all 14 measurement points  — got ' || v_n end));
 
     select count(*) into v_n from public.alerts where status = 'OPEN';
     v_ok := v_n >= 4;
@@ -667,6 +668,88 @@ begin
     execute 'reset role';
     perform set_config('request.jwt.claims', '', true);
     v_res := array_append(v_res, 'FAIL  9 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
+  end;
+
+  -- ------------------- 10. Stage 3: service providers + entry tasks (0015/0016)
+  begin
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', v_admin, 'role', 'authenticated')::text, true);
+
+    select count(*) into v_n from public.measurement_points
+     where point_type = 'SERVICE_PROVIDER_METER' and not expects_daily_reading;
+    v_ok := v_n = 3;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: 3 SERVICE_PROVIDER_METER points, none expecting a daily reading'
+                                       else 'FAIL  10 providers: 3 SERVICE_PROVIDER_METER points  — got ' || v_n end));
+
+    select count(*) into v_n from public.balance_zone_members bzm
+      join public.measurement_points mp on mp.id = bzm.measurement_point_id
+     where mp.point_type = 'SERVICE_PROVIDER_METER';
+    v_ok := v_n = 0;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: they are in no balance zone (difference stays unexplained)'
+                                       else 'FAIL  10 providers: they leaked into a balance zone  — ' || v_n || ' membership(s)' end));
+
+    -- a monthly billing period must be storable on such a point without any schema change
+    begin
+      insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3, entry_basis, entered_by)
+      select id, v_d, v_d + 29, 12000, 'ESTIMATE', v_admin
+        from public.measurement_points where code = 'MP-SP-TMP-01';
+      v_ok := (select days_covered = 30 from public.readings r
+                join public.measurement_points mp on mp.id = r.measurement_point_id
+               where mp.code = 'MP-SP-TMP-01' and r.covers_from = v_d);
+      v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: a 30-day billing period is storable (days_covered = 30)'
+                                         else 'FAIL  10 providers: a 30-day billing period is storable' end));
+    exception when others then
+      v_res := array_append(v_res, 'FAIL  10 providers: a 30-day billing period is storable  — ' || sqlstate || ' ' || sqlerrm);
+    end;
+
+    -- that monthly row must NOT move the daily balance
+    select * into v_bal from public.calculate_zone_balance(v_zone, v_d, v_d);
+    v_ok := v_bal.inflow_m3 = 4450 and v_bal.outflow_measured_m3 = 0 and v_bal.difference_m3 = 3450;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 providers: the monthly row does not touch the daily balance'
+                                       else 'FAIL  10 providers: the monthly row changed the daily balance  — inflow='
+                                            || v_bal.inflow_m3 || ' outflow=' || v_bal.outflow_measured_m3 end));
+
+    v_ok := v_bal.sources_groundwater_total = 7 and v_bal.sources_groundwater_reported = 5
+            and v_bal.sources_israeli_total = 2 and v_bal.sources_israeli_reported = 0;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 balance: source counts by supply type (groundwater 5/7, israeli 0/2)'
+                                       else 'FAIL  10 balance: source counts by supply type  — gw '
+                                            || v_bal.sources_groundwater_reported || '/' || v_bal.sources_groundwater_total
+                                            || ' il ' || v_bal.sources_israeli_reported || '/' || v_bal.sources_israeli_total end));
+
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d);
+    v_ok := v_n = 11;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: 11 daily points listed (service-provider meters excluded)'
+                                       else 'FAIL  10 tasks: 11 daily points listed  — got ' || v_n end));
+
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d) where reading_id is not null;
+    v_ok := v_n = 7;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: 7 already entered, 4 pending for that day'
+                                       else 'FAIL  10 tasks: 7 already entered  — got ' || v_n end));
+
+    v_ok := (select volume_m3 = 1250 from public.get_daily_entry_tasks(v_d)
+              where measurement_point_id = v_p1);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: an entered point carries the CORRECTED volume (1250)'
+                                       else 'FAIL  10 tasks: an entered point carries the corrected volume' end));
+
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+
+    -- the same list, scoped to the field worker
+    execute 'set local role authenticated';
+    perform set_config('request.jwt.claims', json_build_object('sub', v_field, 'role', 'authenticated')::text, true);
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d);
+    v_ok := v_n = 1;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: the field worker sees only their 1 assigned point'
+                                       else 'FAIL  10 tasks: the field worker sees only their 1 assigned point  — got ' || v_n end));
+    v_ok := (select is_assigned from public.get_daily_entry_tasks(v_d) limit 1);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  10 tasks: is_assigned reads true for the field worker'
+                                       else 'FAIL  10 tasks: is_assigned reads true for the field worker' end));
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+  exception when others then
+    execute 'reset role';
+    perform set_config('request.jwt.claims', '', true);
+    v_res := array_append(v_res, 'FAIL  10 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
   -- ==================================== REPORT ======================================
