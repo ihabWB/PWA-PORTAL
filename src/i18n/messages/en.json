@@ -293,6 +293,7 @@
       "constraintViolated": "The values violate a database constraint",
       "invalidInput": "Invalid value",
       "saveFailed": "Could not save. Please try again."
-    }
+    },
+    "pointEditKeepsReadings": "This point carries {count} readings. Editing the code and name here keeps every one of them; creating a new point would detach them."
   }
 }

@@ -69,11 +69,16 @@ export async function getPlaceholderRows(): Promise<DataResult<PlaceholderRow[]>
 function writeError(code: string | undefined, message: string): string {
   if (code === "23505") return "asset.errors.codeTaken";
   if (code === "23514") return "asset.errors.constraintViolated";
-  if (code === "22023")
-    return message.includes("Coordinates")
-      ? "asset.errors.longitudeRange"
-      : "asset.errors.invalidInput";
   if (code === "42501") return "errors.notPermitted";
+  // The database is the last of three layers that reject a half-filled coordinate pair
+  // (browser schema, Server Action schema, then this), so its message must be as specific.
+  if (code === "22023") {
+    if (message.includes("longitude and latitude")) return "asset.errors.coordinatePair";
+    if (message.includes("Coordinates out of range")) return "asset.errors.longitudeRange";
+    if (message.includes("same asset")) return "asset.errors.pathSelfLoop";
+    if (message.includes("asset or on a water path")) return "asset.errors.pointNeedsHost";
+    return "asset.errors.invalidInput";
+  }
   return "asset.errors.saveFailed";
 }
 

@@ -25,7 +25,12 @@
       "Bash(git commit -q -m 'feat\\(stage5\\): asset management — catalogue, points, topology, retirement, placeholder tool *)",
       "Bash(node contaminate.mjs)",
       "Bash(node contaminate.mjs --contaminate)",
-      "Bash(git commit -q -m 'test: make the functional test isolated from operational data *)"
+      "Bash(git commit -q -m 'test: make the functional test isolated from operational data *)",
+      "Bash(node rename-chain.mjs)",
+      "Bash(node render-audit.mjs)",
+      "Bash(cp assets.html assets.bak.html)",
+      "Bash(sed -n '/=== \\\\/assets ===/,/=== \\\\/assets\\\\/new/p')",
+      "Bash(git commit -q -m 'feat\\(assets\\): edit measurement points in place; sharpen coordinate errors *)"
     ]
   }
 }

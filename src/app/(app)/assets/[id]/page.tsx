@@ -125,40 +125,67 @@ export default async function AssetDetailPage({ params }: { params: Promise<{ id
           ) : (
             <ul className="flex flex-col">
               {pointsResult.data.map((p) => (
-                <li
-                  key={p.id}
-                  className="border-separator flex flex-wrap items-baseline justify-between gap-2 border-b py-2 last:border-b-0"
-                >
-                  <span className="flex min-w-0 flex-col">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span>{locale === "ar" ? p.name_ar : (p.name_en ?? p.name_ar)}</span>
-                      {p.is_placeholder && (
-                        <Chip size="sm" variant="soft" color="warning">
-                          {t("placeholder")}
-                        </Chip>
+                <li key={p.id} className="border-separator border-b py-1 last:border-b-0">
+                  {/* Each point opens its own editor: a placeholder code is replaced in place,
+                      so the readings already attached to the point are never detached. */}
+                  <details>
+                    <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-2 py-1">
+                      <span className="flex min-w-0 flex-col">
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span>{locale === "ar" ? p.name_ar : (p.name_en ?? p.name_ar)}</span>
+                          {p.is_placeholder && (
+                            <Chip size="sm" variant="soft" color="warning">
+                              {t("placeholder")}
+                            </Chip>
+                          )}
+                          {!p.expects_daily_reading && (
+                            <Chip size="sm" variant="soft">
+                              {t("notDaily")}
+                            </Chip>
+                          )}
+                          {!p.is_active && (
+                            <Chip size="sm" variant="soft">
+                              {t("pointInactive")}
+                            </Chip>
+                          )}
+                        </span>
+                        <span className="text-muted flex flex-wrap gap-2 text-xs">
+                          <span className="font-mono">{p.code}</span>
+                          <span>{tp(p.point_type)}</span>
+                        </span>
+                      </span>
+                      <span className="text-muted font-mono text-xs whitespace-nowrap tabular-nums">
+                        {t("readingCount", { count: formatNumber(p.reading_count, locale) })}
+                        {p.last_reading_date
+                          ? ` · ${formatDate(`${p.last_reading_date}T00:00:00Z`, locale)}`
+                          : ""}
+                      </span>
+                    </summary>
+                    <div className="border-border mt-2 rounded-(--radius) border p-3">
+                      {p.reading_count > 0 && (
+                        <p className="text-muted mb-3 text-xs">
+                          {t("pointEditKeepsReadings", {
+                            count: formatNumber(p.reading_count, locale),
+                          })}
+                        </p>
                       )}
-                      {!p.expects_daily_reading && (
-                        <Chip size="sm" variant="soft">
-                          {t("notDaily")}
-                        </Chip>
-                      )}
-                      {!p.is_active && (
-                        <Chip size="sm" variant="soft">
-                          {t("pointInactive")}
-                        </Chip>
-                      )}
-                    </span>
-                    <span className="text-muted flex flex-wrap gap-2 text-xs">
-                      <span className="font-mono">{p.code}</span>
-                      <span>{tp(p.point_type)}</span>
-                    </span>
-                  </span>
-                  <span className="text-muted font-mono text-xs whitespace-nowrap tabular-nums">
-                    {t("readingCount", { count: formatNumber(p.reading_count, locale) })}
-                    {p.last_reading_date
-                      ? ` · ${formatDate(`${p.last_reading_date}T00:00:00Z`, locale)}`
-                      : ""}
-                  </span>
+                      <PointForm
+                        assetId={asset.id}
+                        areaId={asset.area_id}
+                        initial={{
+                          id: p.id,
+                          code: p.code,
+                          nameAr: p.name_ar,
+                          nameEn: p.name_en,
+                          pointType: p.point_type,
+                          assetId: asset.id,
+                          areaId: asset.area_id,
+                          expectsDailyReading: p.expects_daily_reading,
+                          isActive: p.is_active,
+                        }}
+                      />
+                    </div>
+                  </details>
                 </li>
               ))}
             </ul>
