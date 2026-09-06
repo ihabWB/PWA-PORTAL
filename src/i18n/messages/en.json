@@ -294,6 +294,11 @@
       "invalidInput": "Invalid value",
       "saveFailed": "Could not save. Please try again."
     },
-    "pointEditKeepsReadings": "This point carries {count} readings. Editing the code and name here keeps every one of them; creating a new point would detach them."
+    "pointEditKeepsReadings": "This point carries {count} readings. Editing the code and name here keeps every one of them; creating a new point would detach them.",
+    "externalReference": "Official reference",
+    "externalReferenceHelp": "The well or connection number as recorded by the water authority, for example 16-11/011. Never used as the code.",
+    "excludedFromBalance": "Excluded from the balance",
+    "excludedFromBalanceHelp": "Measured upstream of a storage tank, so the same water is counted again at the tank inlet. Its daily reading is still required, but it may not join any balance zone.",
+    "excludedFromBalanceChip": "Outside the balance"
   }
 }

@@ -1005,6 +1005,120 @@ begin
     v_res := array_append(v_res, 'FAIL  11 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
   end;
 
+  -- ------------------- 12. anti double-count guards and explained zeros (0019)
+  begin
+    -- a main meter fed from a neighbouring system must be able to say which supply it is
+    begin
+      insert into public.water_assets (code, name_ar, asset_type, supply_type, area_id)
+      values ('ZZT-MM-1', 'عداد رئيسي اختبار', 'MAIN_METER', 'ISRAELI', v_area);
+      v_res := array_append(v_res, 'PASS  12 supply: a MAIN_METER may carry ISRAELI');
+    exception when others then
+      v_res := array_append(v_res, 'FAIL  12 supply: a MAIN_METER may carry ISRAELI  — ' || sqlstate || ' ' || sqlerrm);
+    end;
+
+    begin
+      insert into public.water_assets (code, name_ar, asset_type, supply_type, area_id)
+      values ('ZZT-TANK-BAD', 'خزان بنوع مياه', 'TANK', 'ISRAELI', v_area);
+      v_res := array_append(v_res, 'FAIL  12 supply: a TANK must not carry a supply type  — it was accepted');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '23514' then 'PASS  12 supply: a TANK still may not carry a supply type (23514)'
+                                         else 'FAIL  12 supply: TANK supply type  — wrong error ' || sqlstate end));
+    end;
+
+    -- a point measured upstream of the tank may never join a zone
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id,
+                                           expects_daily_reading, excluded_from_balance)
+    values ('ZZT-MP-UPSTREAM', 'عداد قبل الخزان', 'SOURCE_METER', v_aw1, v_area, true, true)
+    returning id into v_new_point;
+
+    v_ok := (select excluded_from_balance from public.measurement_points where id = v_new_point);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 upstream: the point is marked excluded_from_balance'
+                                       else 'FAIL  12 upstream: the point is marked excluded_from_balance' end));
+
+    begin
+      insert into public.balance_zone_members (zone_id, measurement_point_id, role, measurement_quality)
+      values (v_zone, v_new_point, 'INFLOW', 'MEASURED');
+      v_res := array_append(v_res, 'FAIL  12 upstream: an excluded point was allowed into a balance zone');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '23514' then 'PASS  12 upstream: an excluded point is refused by any balance zone (23514)'
+                                         else 'FAIL  12 upstream: excluded point  — wrong error ' || sqlstate || ' ' || sqlerrm end));
+    end;
+
+    -- it still appears in the daily task list: we want a record of what it pumped
+    select count(*) into v_n from public.get_daily_entry_tasks(v_d)
+     where measurement_point_id = v_new_point;
+    v_ok := v_n = 1;
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 upstream: it is still read daily, only kept out of the balance'
+                                       else 'FAIL  12 upstream: it should still appear in the task list  — got ' || v_n end));
+
+    -- one INFLOW membership per point, across every zone
+    insert into public.balance_zones (code, name_ar) values ('ZZT-ZONE-2', 'منطقة موازنة اختبار 2')
+    returning id into v_new_asset;   -- reused as a scratch uuid holder
+
+    begin
+      insert into public.balance_zone_members (zone_id, measurement_point_id, role, measurement_quality)
+      values (v_new_asset, v_pw1, 'INFLOW', 'MEASURED');
+      v_res := array_append(v_res, 'FAIL  12 double count: the same point was allowed as INFLOW in two zones');
+    exception when others then
+      v_res := array_append(v_res, (case when sqlstate = '23505' then 'PASS  12 double count: a point may be INFLOW in only one zone (23505)'
+                                         else 'FAIL  12 double count  — wrong error ' || sqlstate || ' ' || sqlerrm end));
+    end;
+
+    -- the legitimate chain: ARRIVAL of one zone becomes INFLOW of the next
+    begin
+      insert into public.balance_zone_members (zone_id, measurement_point_id, role, measurement_quality)
+      values (v_new_asset, v_pin, 'INFLOW', 'MEASURED');
+      v_res := array_append(v_res, 'PASS  12 chain: an ARRIVAL point may be the INFLOW of the next zone');
+    exception when others then
+      v_res := array_append(v_res, 'FAIL  12 chain: an ARRIVAL point may be the INFLOW of the next zone  — '
+                                   || sqlstate || ' ' || sqlerrm);
+    end;
+
+    -- an explained zero is not an anomaly; an unexplained zero still is
+    insert into public.measurement_points (code, name_ar, point_type, asset_id, area_id, expects_daily_reading)
+    values ('ZZT-MP-INTERMITTENT', 'عداد بئر متقطع', 'SOURCE_METER', v_aw1, v_area, true)
+    returning id into v_new_point;
+    for v_i in 30..37 loop
+      insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3,
+                                   entry_basis, operational_status, entered_by)
+      values (v_new_point, v_d + v_i, v_d + v_i, 1000, 'METER_DISPLAY', 'OPERATING', v_admin);
+    end loop;
+    insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3,
+                                 entry_basis, operational_status, entered_by)
+    values (v_new_point, v_d + 38, v_d + 38, 0, 'METER_DISPLAY', 'STOPPED', v_admin);
+    v_ok := (select validation_status = 'OK' from public.readings
+              where measurement_point_id = v_new_point and covers_from = v_d + 38);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 zeros: a zero with a STOPPED status is not flagged'
+                                       else 'FAIL  12 zeros: a zero with a STOPPED status was flagged' end));
+
+    v_ok := not exists (select 1 from public.alerts
+                         where alert_type = 'ABNORMAL_READING'
+                           and measurement_point_id = v_new_point and reference_date = v_d + 38);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 zeros: no ABNORMAL_READING alert for an explained zero'
+                                       else 'FAIL  12 zeros: an explained zero raised an alert' end));
+
+    insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3,
+                                 entry_basis, operational_status, entered_by)
+    values (v_new_point, v_d + 39, v_d + 39, 0, 'METER_DISPLAY', 'OPERATING', v_admin);
+    v_ok := (select validation_status = 'FLAGGED' from public.readings
+              where measurement_point_id = v_new_point and covers_from = v_d + 39);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 zeros: a zero while claiming to OPERATE is still flagged'
+                                       else 'FAIL  12 zeros: a zero while claiming to OPERATE was not flagged  — got '
+                                            || (select validation_status from public.readings
+                                                 where measurement_point_id = v_new_point and covers_from = v_d + 39) end));
+
+    -- the stopped day must not drag the baseline down
+    insert into public.readings (measurement_point_id, covers_from, covers_to, volume_m3,
+                                 entry_basis, operational_status, entered_by)
+    values (v_new_point, v_d + 40, v_d + 40, 1000, 'METER_DISPLAY', 'OPERATING', v_admin);
+    v_ok := (select validation_status = 'OK' from public.readings
+              where measurement_point_id = v_new_point and covers_from = v_d + 40);
+    v_res := array_append(v_res, (case when v_ok then 'PASS  12 zeros: an ordinary day after downtime is not flagged'
+                                       else 'FAIL  12 zeros: an ordinary day after downtime was flagged' end));
+  exception when others then
+    v_res := array_append(v_res, 'FAIL  12 section crashed (its writes were rolled back)  — ' || sqlstate || ' ' || sqlerrm);
+  end;
+
   -- ==================================== REPORT ======================================
   -- A crashed section means its checks never ran — that is missing coverage, not a pass.
   v_total := coalesce(array_length(v_res, 1), 0);

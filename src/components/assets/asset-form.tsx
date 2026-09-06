@@ -25,6 +25,7 @@ import { saveAssetAction, type AssetFormState } from "@/app/(app)/assets/actions
 import {
   ASSET_TYPES,
   OPERATIONAL_STATUSES,
+  OPTIONAL_SUPPLY_ASSET_TYPES,
   SOURCE_ASSET_TYPES,
   type AreaRow,
 } from "@/types/database";
@@ -87,6 +88,9 @@ export function AssetForm({ areas, initial, isPlaceholder }: AssetFormProps) {
 
   const assetType = useWatch({ control, name: "assetType" });
   const isSource = SOURCE_ASSET_TYPES.includes(assetType);
+  // A main meter may declare a supply type without being obliged to: the Saeer screen splits
+  // the total between groundwater and purchased water, so its volume has to be attributable.
+  const maySetSupply = isSource || OPTIONAL_SUPPLY_ASSET_TYPES.includes(assetType);
   const storesWater = assetType === "TANK" || assetType === "RESERVOIR";
 
   useEffect(() => {
@@ -103,7 +107,7 @@ export function AssetForm({ areas, initial, isPlaceholder }: AssetFormProps) {
     set("nameAr", values.nameAr);
     set("nameEn", values.nameEn);
     set("assetType", values.assetType);
-    set("supplyType", isSource ? values.supplyType : null);
+    set("supplyType", maySetSupply ? values.supplyType : null);
     set("areaId", values.areaId);
     set("currentStatus", values.currentStatus);
     set("longitude", values.longitude);
@@ -234,7 +238,7 @@ export function AssetForm({ areas, initial, isPlaceholder }: AssetFormProps) {
           )}
         />
 
-        {isSource && (
+        {maySetSupply && (
           <Controller
             control={control}
             name="supplyType"
@@ -244,9 +248,11 @@ export function AssetForm({ areas, initial, isPlaceholder }: AssetFormProps) {
                 selectedKey={field.value ?? null}
                 onSelectionChange={(k) => field.onChange(k)}
                 isInvalid={fieldState.invalid}
-                isRequired
+                isRequired={isSource}
               >
-                <Label>{t("supplyTypeLabel")}</Label>
+                <Label>
+                  {isSource ? t("supplyTypeLabel") : `${t("supplyTypeLabel")} (${tc("optional")})`}
+                </Label>
                 <Select.Trigger />
                 <Select.Popover>
                   <ListBox>
@@ -332,6 +338,26 @@ export function AssetForm({ areas, initial, isPlaceholder }: AssetFormProps) {
             >
               <Label>{`${t("operationalStartDate")} (${tc("optional")})`}</Label>
               <Input />
+              {fieldState.error?.message && <FieldError>{tr(fieldState.error.message)}</FieldError>}
+            </TextField>
+          )}
+        />
+
+        <Controller
+          control={control}
+          name="externalReference"
+          render={({ field, fieldState }) => (
+            <TextField
+              name={field.name}
+              value={field.value ?? ""}
+              onChange={(v) => field.onChange(v === "" ? null : v)}
+              onBlur={field.onBlur}
+              isInvalid={fieldState.invalid}
+              dir="ltr"
+            >
+              <Label>{`${t("externalReference")} (${tc("optional")})`}</Label>
+              <Input />
+              <Description>{t("externalReferenceHelp")}</Description>
               {fieldState.error?.message && <FieldError>{tr(fieldState.error.message)}</FieldError>}
             </TextField>
           )}

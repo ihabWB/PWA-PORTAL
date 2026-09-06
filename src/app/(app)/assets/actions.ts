@@ -150,6 +150,7 @@ export async function savePointAction(
     areaId: optStr(formData.get("areaId")),
     expectsDailyReading: bool(formData.get("expectsDailyReading")),
     isActive: bool(formData.get("isActive")),
+    excludedFromBalance: bool(formData.get("excludedFromBalance")),
   });
   if (!parsed.success) {
     return {

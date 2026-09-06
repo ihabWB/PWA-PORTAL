@@ -108,6 +108,8 @@ export default async function AssetDetailPage({ params }: { params: Promise<{ id
               capacityM3: asset.capacity_m3 === null ? null : Number(asset.capacity_m3),
               heightM: asset.height_m === null ? null : Number(asset.height_m),
               isPassThrough: asset.is_pass_through,
+              externalReference: asset.external_reference,
+              descriptionAr: asset.description_ar,
               operationalStartDate: asset.operational_start_date,
             }}
           />
@@ -141,6 +143,11 @@ export default async function AssetDetailPage({ params }: { params: Promise<{ id
                           {!p.expects_daily_reading && (
                             <Chip size="sm" variant="soft">
                               {t("notDaily")}
+                            </Chip>
+                          )}
+                          {p.excluded_from_balance && (
+                            <Chip size="sm" variant="soft" color="accent">
+                              {t("excludedFromBalanceChip")}
                             </Chip>
                           )}
                           {!p.is_active && (
@@ -182,6 +189,7 @@ export default async function AssetDetailPage({ params }: { params: Promise<{ id
                           areaId: asset.area_id,
                           expectsDailyReading: p.expects_daily_reading,
                           isActive: p.is_active,
+                          excludedFromBalance: p.excluded_from_balance,
                         }}
                       />
                     </div>

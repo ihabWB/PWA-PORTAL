@@ -33,8 +33,16 @@ export const ASSET_TYPES = [
 ] as const;
 export type AssetType = (typeof ASSET_TYPES)[number];
 
-/** Asset types that ARE a water source and therefore must carry a supply_type. */
+/** Asset types that ARE a water source and therefore MUST carry a supply_type. */
 export const SOURCE_ASSET_TYPES: readonly AssetType[] = ["WELL", "SPRING", "ISRAELI_CONNECTION"];
+
+/**
+ * Asset types that MAY carry a supply_type without being obliged to. A main meter can sit on
+ * a neighbouring Israeli system or on our own groundwater, and the Saeer screen splits the
+ * total by supply type, so the figure has to be attributable.
+ * Kept in step with water_assets_supply_type_chk in migration 0019.
+ */
+export const OPTIONAL_SUPPLY_ASSET_TYPES: readonly AssetType[] = ["MAIN_METER"];
 
 export type SupplyType = "GROUNDWATER" | "ISRAELI";
 
@@ -200,6 +208,8 @@ export type AssetCatalogueRow = {
   capacity_m3: number | null;
   height_m: number | null;
   is_pass_through: boolean;
+  external_reference: string | null;
+  description_ar: string | null;
   operational_start_date: string | null;
   operational_end_date: string | null;
   is_retired: boolean;
@@ -231,6 +241,7 @@ export type AssetPointRow = {
   point_type: PointType;
   expects_daily_reading: boolean;
   is_active: boolean;
+  excluded_from_balance: boolean;
   is_placeholder: boolean;
   reading_count: number;
   last_reading_date: string | null;
@@ -362,6 +373,7 @@ export type Database = {
           p_area_id: string | null;
           p_expects_daily_reading: boolean;
           p_is_active: boolean;
+          p_excluded_from_balance: boolean;
         };
         Returns: string;
       };

@@ -150,6 +150,7 @@ export async function saveMeasurementPoint(
     p_area_id: input.areaId ?? null,
     p_expects_daily_reading: input.expectsDailyReading,
     p_is_active: input.isActive,
+    p_excluded_from_balance: input.excludedFromBalance,
   });
   if (error) return fail(writeError(error.code, error.message), error.message);
   return ok(data as string);

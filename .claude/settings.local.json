@@ -30,7 +30,19 @@
       "Bash(node render-audit.mjs)",
       "Bash(cp assets.html assets.bak.html)",
       "Bash(sed -n '/=== \\\\/assets ===/,/=== \\\\/assets\\\\/new/p')",
-      "Bash(git commit -q -m 'feat\\(assets\\): edit measurement points in place; sharpen coordinate errors *)"
+      "Bash(git commit -q -m 'feat\\(assets\\): edit measurement points in place; sharpen coordinate errors *)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(git pull *)",
+      "Bash(npm install *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/login)",
+      "Bash(node contaminate.mjs clean)",
+      "Bash(sed -n 's/^  TEST REPORT.*//p')",
+      "Bash(node -)",
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(sed -i 's/if \\(mode === \"no0014\"\\) order = order.filter\\(\\(p\\) => p !== \"0014\"\\);/if \\(mode === \"no0014\"\\) order = order.filter\\(\\(p\\) => p !== \"0014\"\\);\\\\nif \\(mode === \"no0019\"\\) order = order.filter\\(\\(p\\) => p !== \"0019\"\\);/' contaminate.mjs)",
+      "Bash(node contaminate.mjs no0019)",
+      "Bash(npx tsx *)",
+      "Bash(git commit -q -m 'feat\\(db\\): prerequisites for the real Aleizariya topology \\(0019\\) *)"
     ]
   }
 }

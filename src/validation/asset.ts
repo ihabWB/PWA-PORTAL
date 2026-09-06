@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   ASSET_TYPES,
   OPERATIONAL_STATUSES,
+  OPTIONAL_SUPPLY_ASSET_TYPES,
   POINT_TYPES,
   SOURCE_ASSET_TYPES,
 } from "@/types/database";
@@ -72,15 +73,19 @@ export const assetSchema = z
     message: "asset.errors.coordinatePair",
     path: ["latitude"],
   })
-  // A source must say where its water comes from; anything else must not claim one.
+  // A source must say where its water comes from.
   .refine((v) => !SOURCE_ASSET_TYPES.includes(v.assetType) || v.supplyType != null, {
     message: "asset.errors.supplyTypeRequired",
     path: ["supplyType"],
   })
-  .refine((v) => SOURCE_ASSET_TYPES.includes(v.assetType) || v.supplyType == null, {
-    message: "asset.errors.supplyTypeNotAllowed",
-    path: ["supplyType"],
-  })
+  // A main meter may declare one without being obliged to; anything else must not claim one.
+  .refine(
+    (v) =>
+      SOURCE_ASSET_TYPES.includes(v.assetType) ||
+      OPTIONAL_SUPPLY_ASSET_TYPES.includes(v.assetType) ||
+      v.supplyType == null,
+    { message: "asset.errors.supplyTypeNotAllowed", path: ["supplyType"] },
+  )
   // Storage geometry is either fully known or left unknown; a half-known tank invents volumes.
   .refine((v) => (v.capacityM3 == null) === (v.heightM == null), {
     message: "asset.errors.geometryPair",
@@ -110,6 +115,8 @@ export const measurementPointSchema = z
     areaId: z.uuid().nullable().optional(),
     expectsDailyReading: z.boolean(),
     isActive: z.boolean(),
+    /** Measured upstream of a storage node: the same water is counted again downstream. */
+    excludedFromBalance: z.boolean(),
   })
   .refine((v) => v.assetId != null || v.waterPathId != null, {
     message: "asset.errors.pointNeedsHost",

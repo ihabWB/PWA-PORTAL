@@ -55,6 +55,7 @@ export function PointForm({ assetId, areaId, initial }: PointFormProps) {
     areaId,
     expectsDailyReading: true,
     isActive: true,
+    excludedFromBalance: false,
     ...initial,
   };
 
@@ -78,6 +79,7 @@ export function PointForm({ assetId, areaId, initial }: PointFormProps) {
     set("areaId", values.areaId);
     fd.set("expectsDailyReading", String(values.expectsDailyReading));
     fd.set("isActive", String(values.isActive));
+    fd.set("excludedFromBalance", String(values.excludedFromBalance));
     startTransition(() => {
       formAction(fd);
       if (!values.id) reset(defaults);
@@ -198,6 +200,19 @@ export function PointForm({ assetId, areaId, initial }: PointFormProps) {
               {t("expectsDailyReading")}
             </Checkbox>
             <Description className="text-muted text-xs">{t("expectsDailyReadingHelp")}</Description>
+          </div>
+        )}
+      />
+
+      <Controller
+        control={control}
+        name="excludedFromBalance"
+        render={({ field }) => (
+          <div className="flex flex-col gap-1">
+            <Checkbox isSelected={field.value ?? false} onChange={field.onChange}>
+              {t("excludedFromBalance")}
+            </Checkbox>
+            <Description className="text-muted text-xs">{t("excludedFromBalanceHelp")}</Description>
           </div>
         )}
       />
